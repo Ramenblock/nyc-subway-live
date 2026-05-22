@@ -111,6 +111,27 @@ body {
   gap: 9px;
   font-size: 11px;
   color: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin: 0 -6px;
+  transition: background 0.15s ease, opacity 0.2s ease;
+  user-select: none;
+}
+
+.legend-row:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.legend-row.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.95);
+  opacity: 1 !important;
+}
+
+.legend-row.dimmed {
+  opacity: 0.25;
 }
 
 .legend-swatch {
@@ -119,6 +140,77 @@ body {
   border-radius: 50%;
   flex-shrink: 0;
   /* box-shadow set inline via JS to match each line's colour */
+}
+
+/* ── Line info panel ────────────────────────────────────────────────── */
+
+#line-info {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 12px;
+  margin-top: 6px;
+  margin-bottom: 10px;
+}
+
+#line-info.hidden { display: none; }
+
+#line-info-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+
+#line-info-name {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+#line-info-close {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.3);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+
+#line-info-close:hover {
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#line-info-stats {
+  display: flex;
+  gap: 6px;
+}
+
+.stat-item {
+  flex: 1;
+  text-align: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 7px 4px 6px;
+}
+
+.stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 8px;
+  color: rgba(255, 255, 255, 0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 3px;
 }
 
 /* ── Last updated timestamp ─────────────────────────────────────────── */
