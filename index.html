@@ -31,8 +31,30 @@
       <span id="train-count-label"> trains active</span>
     </div>
 
-    <!-- One row per line group, coloured to match -->
+    <!-- One row per line group, coloured to match — click to filter -->
     <div id="legend"></div>
+
+    <!-- Shown when a legend row is clicked — displays live stats for that line -->
+    <div id="line-info" class="hidden">
+      <div id="line-info-header">
+        <span id="line-info-name"></span>
+        <button id="line-info-close" title="Clear filter">✕</button>
+      </div>
+      <div id="line-info-stats">
+        <div class="stat-item">
+          <div class="stat-value" id="line-info-count">—</div>
+          <div class="stat-label">active</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="line-info-north">—</div>
+          <div class="stat-label">↑ north</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-value" id="line-info-south">—</div>
+          <div class="stat-label">↓ south</div>
+        </div>
+      </div>
+    </div>
 
     <div id="last-updated"></div>
   </div>
