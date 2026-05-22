@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NYC Subway Live</title>
+
+  <!-- Mapbox GL JS — the map engine that renders the dark map -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
+
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- The map fills the entire page -->
+  <div id="map"></div>
+
+  <!-- Top-left info panel -->
+  <div id="panel">
+    <div id="panel-header">
+      <div id="live-indicator" title="Live data">
+        <span id="live-dot"></span>
+        <span>LIVE</span>
+      </div>
+      <div id="panel-title">NYC Subway</div>
+    </div>
+
+    <div id="train-count-row">
+      <span id="train-count">—</span>
+      <span id="train-count-label"> trains active</span>
+    </div>
+
+    <!-- One row per line group, coloured to match -->
+    <div id="legend"></div>
+
+    <div id="last-updated"></div>
+  </div>
+
+  <!-- Floating tooltip shown when hovering over a train -->
+  <div id="tooltip" class="hidden">
+    <div id="tooltip-line"></div>
+    <div id="tooltip-status"></div>
+    <div id="tooltip-stop"></div>
+  </div>
+
+  <!-- Error banner shown at the bottom if data can't load -->
+  <div id="error-banner" class="hidden">
+    <span id="error-message"></span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

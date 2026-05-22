@@ -1,0 +1,11 @@
+{
+  "name": "nyc-subway-live",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "gtfs-realtime-bindings": "^1.0.0"
+  }
+}

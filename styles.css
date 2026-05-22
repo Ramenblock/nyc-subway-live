@@ -1,0 +1,198 @@
+/* =====================================================================
+   NYC Subway Live — Stylesheet
+   Design goal: feel like one of those physical LED subway maps.
+   Dark background, glowing coloured dots, minimal chrome.
+   ===================================================================== */
+
+/* Reset browser defaults */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  background: #0a0a0f;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Inter', sans-serif;
+  overflow: hidden; /* Map fills the window */
+}
+
+/* ── Map ────────────────────────────────────────────────────────────── */
+
+#map {
+  position: absolute;
+  inset: 0; /* shorthand for top:0; right:0; bottom:0; left:0 */
+}
+
+/* ── Info panel (top-left) ──────────────────────────────────────────── */
+
+#panel {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 10;
+  width: 210px;
+  padding: 16px;
+  background: rgba(8, 8, 14, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+}
+
+#panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+#live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+/* The pulsing green dot that shows the feed is live */
+#live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 6px #4ade80, 0 0 12px rgba(74, 222, 128, 0.4);
+  animation: pulse-dot 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.8); }
+}
+
+#panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+#train-count-row {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.4);
+  margin-bottom: 14px;
+}
+
+#train-count {
+  font-size: 22px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Legend ─────────────────────────────────────────────────────────── */
+
+#legend {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+  padding-top: 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 12px;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  /* box-shadow set inline via JS to match each line's colour */
+}
+
+/* ── Last updated timestamp ─────────────────────────────────────────── */
+
+#last-updated {
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.25);
+  letter-spacing: 0.02em;
+}
+
+/* ── Hover tooltip ──────────────────────────────────────────────────── */
+
+#tooltip {
+  position: fixed;  /* fixed so it follows the cursor regardless of scroll */
+  z-index: 100;
+  pointer-events: none; /* clicks pass through it to the map */
+  background: rgba(8, 8, 14, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 10px 13px;
+  min-width: 140px;
+  transition: opacity 0.1s ease;
+}
+
+#tooltip.hidden { opacity: 0; }
+
+#tooltip-line {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 3px;
+  /* colour set inline by JS to match the line */
+}
+
+#tooltip-status {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 2px;
+}
+
+#tooltip-stop {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.8);
+  line-height: 1.4;
+}
+
+/* ── Error banner ───────────────────────────────────────────────────── */
+
+#error-banner {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  background: rgba(220, 38, 38, 0.88);
+  border: 1px solid rgba(255, 100, 100, 0.3);
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 12px;
+  color: #fff;
+  max-width: 400px;
+  text-align: center;
+}
+
+#error-banner.hidden { display: none; }
+
+/* ── Mapbox attribution (keep it subtle) ────────────────────────────── */
+
+.mapboxgl-ctrl-attrib {
+  background: rgba(0, 0, 0, 0.4) !important;
+  border-radius: 4px;
+}
+
+.mapboxgl-ctrl-attrib a {
+  color: rgba(255, 255, 255, 0.4) !important;
+}
