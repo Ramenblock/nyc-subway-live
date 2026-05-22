@@ -4,25 +4,21 @@
  * This is the main browser-side code. Here's what it does, in order:
  *
  *   1. Initialises a dark Mapbox GL map of New York City
- *   2. Fetches all subway station locations from /api/stops
- *   3. Draws small station dots on the map
- *   4. Starts polling /api/subway every 15 seconds for live train positions
- *   5. Renders each train as a glowing coloured circle, colour-coded to its line
- *   6. Smoothly interpolates train positions between data updates
- *   7. Shows a tooltip when you hover over a train
- *
- * To make this work YOU NEED TO:
- *   - Replace YOUR_MAPBOX_TOKEN_HERE below with your real Mapbox public token
- *   - Set MTA_API_KEY in your Vercel project settings (see README)
+ *   2. Loads subway line paths from /api/lines and draws them on the map
+ *   3. Fetches all subway station locations from /api/stops
+ *   4. Draws small station dots on the map
+ *   5. Starts polling /api/subway every 15 seconds for live train positions
+ *   6. Renders each train as a glowing coloured circle, colour-coded to its line
+ *   7. Smoothly interpolates train positions between data updates
+ *      (snaps instead of animating when a train jumps to a new stop)
+ *   8. Shows a tooltip when you hover over a train
+ *   9. Interactive legend — click any line group to filter the map and see stats
  */
 
 // ── Your Mapbox public token ────────────────────────────────────────────
-// Get a free one at https://account.mapbox.com → Tokens
-// It looks like: pk.eyJ1IjoieW91cm5hbWUiLCJhIjoiY...
 const MAPBOX_TOKEN = 'pk.eyJ1IjoibWFyd2FucmFtZW4iLCJhIjoiY21wZ2l4czVmMG4xbDJyb2dzMmFyYjA5OCJ9.QxR5lT7I37MZyDSdhgINBQ';
 
 // ── Official MTA subway line colours ────────────────────────────────────
-// These are the exact hex values published in the MTA's brand guidelines.
 const LINE_COLORS = {
   '1':  '#EE352E', '2':  '#EE352E', '3':  '#EE352E',
   '4':  '#00933C', '5':  '#00933C', '6':  '#00933C', '6X': '#00933C',
@@ -58,6 +54,7 @@ let stops = {};           // station lookup: stop_id → { name, lat, lon }
 let currentFeatures = []; // the most recent list of train features for animation
 let targetFeatures  = []; // the features we're animating towards
 let animationStart  = null;
+let selectedGroup   = null; // the currently selected LINE_GROUPS entry (or null = show all)
 const ANIMATION_DURATION = 10000; // 10 seconds to slide to new positions
 
 // ── Initialise Mapbox ───────────────────────────────────────────────────
@@ -71,42 +68,58 @@ if (!MAPBOX_TOKEN || MAPBOX_TOKEN === 'YOUR_MAPBOX_TOKEN_HERE') {
 
   map = new mapboxgl.Map({
     container: 'map',
-    style: 'mapbox://styles/mapbox/dark-v11', // Mapbox's beautiful dark style
-    center: [-73.9734, 40.7282],              // Manhattan, slightly south of midtown
+    style: 'mapbox://styles/mapbox/dark-v11',
+    center: [-73.9734, 40.7282],
     zoom: 11.2,
     minZoom: 9,
     maxZoom: 18,
     antialias: true,
   });
 
-  // Add zoom controls (the +/- buttons)
   map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right');
-
   map.on('load', onMapLoad);
 }
 
 // ── Map loaded — set everything up ─────────────────────────────────────
 
 async function onMapLoad() {
-  // Build the map layers first, then load data
   setupMapLayers();
   buildLegend();
 
-  // Load station locations (needed for trains that don't report GPS)
-  await loadStops();
+  // Load subway line paths, station locations, then live train data
+  await Promise.all([loadLines(), loadStops()]);
 
-  // First data fetch, then repeat every 15 seconds
   await fetchAndUpdateTrains();
   setInterval(fetchAndUpdateTrains, 15000);
 }
 
 // ── Map layers ──────────────────────────────────────────────────────────
-// Mapbox GL works with "sources" (the data) and "layers" (how to draw it).
-// We use GeoJSON sources — a standard format for geographic data.
 
 function setupMapLayers() {
+  // ── Subway route lines ────────────────────────────────────────────
+  // These are the actual track paths, drawn before everything else so
+  // train dots sit on top of them.
+  map.addSource('lines-source', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+
+  map.addLayer({
+    id: 'lines-layer',
+    type: 'line',
+    source: 'lines-source',
+    layout: {
+      'line-join': 'round',
+      'line-cap':  'round',
+    },
+    paint: {
+      'line-color':   ['get', 'color'],
+      'line-width':   1.5,
+      'line-opacity': 0.4,
+    },
+  });
+
   // ── Station dots ──────────────────────────────────────────────────
-  // Small, dim dots showing where stations are
   map.addSource('stops-source', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
@@ -129,7 +142,6 @@ function setupMapLayers() {
   });
 
   // ── Train glow (outer halo) ───────────────────────────────────────
-  // A soft blurred circle behind each train dot creates the glow effect
   map.addSource('trains-source', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
@@ -145,9 +157,9 @@ function setupMapLayers() {
         9, 10,
         14, 22,
       ],
-      'circle-color': ['get', 'color'],
+      'circle-color':   ['get', 'color'],
       'circle-opacity': 0.25,
-      'circle-blur': 1,
+      'circle-blur':    1,
     },
   });
 
@@ -162,32 +174,31 @@ function setupMapLayers() {
         9, 4,
         14, 10,
       ],
-      'circle-color': ['get', 'color'],
+      'circle-color':        ['get', 'color'],
       'circle-stroke-width': 1.5,
       'circle-stroke-color': 'rgba(255, 255, 255, 0.85)',
     },
   });
 
   // ── Train route label ─────────────────────────────────────────────
-  // The line letter/number rendered on top of each dot at higher zoom levels
   map.addLayer({
     id: 'trains-label',
     type: 'symbol',
     source: 'trains-source',
-    minzoom: 12, // Only show labels when zoomed in enough to read them
+    minzoom: 12,
     layout: {
-      'text-field': ['get', 'route'],
-      'text-font': ['DIN Pro Bold', 'Arial Unicode MS Bold'],
+      'text-field':            ['get', 'route'],
+      'text-font':             ['DIN Pro Bold', 'Arial Unicode MS Bold'],
       'text-size': [
         'interpolate', ['linear'], ['zoom'],
         12, 7,
         16, 13,
       ],
-      'text-allow-overlap': true,
+      'text-allow-overlap':    true,
       'text-ignore-placement': true,
     },
     paint: {
-      'text-color': '#ffffff',
+      'text-color':      '#ffffff',
       'text-halo-color': ['get', 'color'],
       'text-halo-width': 1,
     },
@@ -204,14 +215,30 @@ function setupMapLayers() {
 
   map.on('mousemove', 'trains-dot', (e) => {
     positionTooltip(e.originalEvent);
-    const props = e.features[0].properties;
-    renderTooltip(props);
+    renderTooltip(e.features[0].properties);
   });
 
   map.on('mouseleave', 'trains-dot', () => {
     map.getCanvas().style.cursor = '';
     document.getElementById('tooltip').classList.add('hidden');
   });
+}
+
+// ── Load subway line paths ──────────────────────────────────────────────
+
+async function loadLines() {
+  try {
+    const res = await fetch('/api/lines');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const geojson = await res.json();
+    if (geojson.error) throw new Error(geojson.error);
+
+    map.getSource('lines-source').setData(geojson);
+    console.log(`Loaded ${geojson.features?.length || 0} subway line segments`);
+  } catch (err) {
+    console.warn('Could not load subway lines:', err.message);
+    // Non-fatal — the map still shows trains without the route paths
+  }
 }
 
 // ── Load station data ───────────────────────────────────────────────────
@@ -222,17 +249,11 @@ async function loadStops() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     stops = await res.json();
 
-    // Render stations on the map now that we have their coordinates
     const features = Object.entries(stops)
-      // The data has base IDs ("A27") AND directional IDs ("A27N", "A27S").
-      // Only render one dot per station — skip the directional duplicates.
       .filter(([id]) => !/[NS]$/.test(id))
       .map(([id, stop]) => ({
         type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: [stop.lon, stop.lat],
-        },
+        geometry: { type: 'Point', coordinates: [stop.lon, stop.lat] },
         properties: { id, name: stop.name },
       }));
 
@@ -244,7 +265,6 @@ async function loadStops() {
     console.log(`Loaded ${features.length} stations`);
   } catch (err) {
     console.warn('Could not load station data:', err.message);
-    // Non-fatal — trains with GPS will still appear correctly
   }
 }
 
@@ -255,78 +275,67 @@ async function fetchAndUpdateTrains() {
     const res = await fetch('/api/subway');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-
     if (data.error) throw new Error(data.error);
 
-    // Build a GeoJSON feature for each train that has a known position
     const newFeatures = [];
 
     for (const vehicle of data.vehicles) {
       let lat = vehicle.lat;
       let lon = vehicle.lon;
 
-      // If no GPS, fall back to the stop's coordinates
       if ((!lat || !lon) && vehicle.stopId) {
         const stop = lookupStop(vehicle.stopId);
         if (stop) { lat = stop.lat; lon = stop.lon; }
       }
 
-      if (!lat || !lon) continue; // Can't place this train — skip it
+      if (!lat || !lon) continue;
 
       const route = vehicle.routeId;
       const color = LINE_COLORS[route] || '#888888';
 
       newFeatures.push({
         type: 'Feature',
-        geometry: {
-          type: 'Point',
-          coordinates: [lon, lat],
-        },
+        geometry: { type: 'Point', coordinates: [lon, lat] },
         properties: {
-          id:        vehicle.id,
+          id:       vehicle.id,
           route,
           color,
-          stopId:    vehicle.stopId,
-          status:    vehicle.currentStatus,
-          stopName:  lookupStop(vehicle.stopId)?.name || vehicle.stopId || '—',
+          stopId:   vehicle.stopId,
+          status:   vehicle.currentStatus,
+          stopName: lookupStop(vehicle.stopId)?.name || vehicle.stopId || '—',
         },
       });
     }
 
-    // Kick off smooth animation from old positions to new positions
     startAnimation(newFeatures);
 
-    // Update the count display
     document.getElementById('train-count').textContent = newFeatures.length;
 
-    // Update the timestamp
     const now = new Date();
     document.getElementById('last-updated').textContent =
       'Updated ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-    // Hide any previous error
     document.getElementById('error-banner').classList.add('hidden');
+
+    // Refresh info panel counts if a line is selected
+    if (selectedGroup) updateInfoPanel();
 
   } catch (err) {
     console.error('Failed to fetch train data:', err.message);
-    showError('Could not load live data. Check your MTA API key in Vercel settings.');
+    showError('Could not load live data. Retrying shortly…');
   }
 }
 
 // ── Smooth position animation ───────────────────────────────────────────
-// When new positions arrive every 15 seconds, instead of jumping trains
-// abruptly, we glide them smoothly to their new locations over 10 seconds.
 
 function startAnimation(newFeatures) {
-  // Snapshot the current rendered positions as the starting point
   currentFeatures = interpolatedFeatures(
     currentFeatures,
     targetFeatures,
     animationStart ? Math.min((Date.now() - animationStart) / ANIMATION_DURATION, 1) : 1
   );
-  targetFeatures  = newFeatures;
-  animationStart  = Date.now();
-
+  targetFeatures = newFeatures;
+  animationStart = Date.now();
   requestAnimationFrame(animateFrame);
 }
 
@@ -343,17 +352,20 @@ function animateFrame() {
     });
   }
 
-  if (t < 1) {
-    requestAnimationFrame(animateFrame);
-  }
+  if (t < 1) requestAnimationFrame(animateFrame);
 }
 
 /**
  * Blends two sets of features by linearly interpolating coordinates.
- * Trains that appear or disappear are handled gracefully.
+ *
+ * NYC subway trains mostly lack GPS and are placed at their current stop.
+ * When a train advances to the next stop the coordinates jump suddenly —
+ * animating that would make the dot fly across the map. We skip the
+ * animation for any movement larger than ~2 km and snap instead.
+ * Adjacent stops are 0.3–1 km apart, so legitimate smooth motion is well
+ * under that threshold.
  */
 function interpolatedFeatures(from, to, t) {
-  // Build a lookup of the previous positions by vehicle ID
   const fromMap = {};
   for (const f of from) {
     fromMap[f.properties.id] = f.geometry.coordinates;
@@ -364,12 +376,16 @@ function interpolatedFeatures(from, to, t) {
     const prev = fromMap[id];
     const next = feature.geometry.coordinates;
 
-    const coords = prev
-      ? [
-          lerp(prev[0], next[0], t),
-          lerp(prev[1], next[1], t),
-        ]
-      : next; // New train — just place it directly
+    let coords = next; // default: snap to new position
+
+    if (prev) {
+      const dx = prev[0] - next[0];
+      const dy = prev[1] - next[1];
+      // 0.0004 ≈ (0.02°)² — a ~2 km diagonal threshold at NYC's latitude
+      if (dx * dx + dy * dy < 0.0004) {
+        coords = [lerp(prev[0], next[0], t), lerp(prev[1], next[1], t)];
+      }
+    }
 
     return {
       ...feature,
@@ -378,10 +394,8 @@ function interpolatedFeatures(from, to, t) {
   });
 }
 
-// Linear interpolation helper
 function lerp(a, b, t) { return a + (b - a) * t; }
 
-// Smooth easing (slow-in, slow-out)
 function easeInOut(t) {
   return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
 }
@@ -399,9 +413,9 @@ const STATUS_LABELS = {
   0: 'Incoming at',
   1: 'Stopped at',
   2: 'In transit to',
-  'INCOMING_AT':  'Incoming at',
-  'STOPPED_AT':   'Stopped at',
-  'IN_TRANSIT_TO':'In transit to',
+  'INCOMING_AT':   'Incoming at',
+  'STOPPED_AT':    'Stopped at',
+  'IN_TRANSIT_TO': 'In transit to',
 };
 
 function renderTooltip(props) {
@@ -417,7 +431,6 @@ function positionTooltip(mouseEvent) {
   const y    = mouseEvent.clientY;
   const rect = tip.getBoundingClientRect();
 
-  // Keep tooltip on screen
   const left = (x + 14 + rect.width > window.innerWidth)
     ? x - rect.width - 10
     : x + 14;
@@ -434,8 +447,9 @@ function positionTooltip(mouseEvent) {
 
 function buildLegend() {
   const legend = document.getElementById('legend');
-  legend.innerHTML = LINE_GROUPS.map(group => `
-    <div class="legend-row">
+
+  legend.innerHTML = LINE_GROUPS.map((group, i) => `
+    <div class="legend-row" data-index="${i}" title="Click to filter">
       <div class="legend-swatch" style="
         background: ${group.color};
         box-shadow: 0 0 5px ${group.color}, 0 0 10px ${group.color}55;
@@ -443,6 +457,89 @@ function buildLegend() {
       <span>${group.label}</span>
     </div>
   `).join('');
+
+  legend.querySelectorAll('.legend-row').forEach((row, i) => {
+    row.addEventListener('click', () => selectGroup(LINE_GROUPS[i]));
+  });
+
+  // Wire up the close button in the info panel
+  document.getElementById('line-info-close').addEventListener('click', () => {
+    if (selectedGroup) selectGroup(selectedGroup); // toggles off
+  });
+}
+
+// ── Line selection ──────────────────────────────────────────────────────
+
+function selectGroup(group) {
+  // Clicking the same group again deselects it
+  selectedGroup = (selectedGroup === group) ? null : group;
+
+  updateLegendState();
+  updateMapFilters();
+  updateInfoPanel();
+}
+
+function updateLegendState() {
+  document.querySelectorAll('.legend-row').forEach((row, i) => {
+    const group = LINE_GROUPS[i];
+    row.classList.toggle('active',  group === selectedGroup);
+    row.classList.toggle('dimmed',  selectedGroup !== null && group !== selectedGroup);
+  });
+}
+
+function updateMapFilters() {
+  if (selectedGroup) {
+    const routeFilter = ['in', ['get', 'route'], ['literal', selectedGroup.routes]];
+    map.setFilter('trains-dot',   routeFilter);
+    map.setFilter('trains-glow',  routeFilter);
+    map.setFilter('trains-label', routeFilter);
+
+    // Highlight selected line paths, fade everything else
+    map.setPaintProperty('lines-layer', 'line-opacity', [
+      'case',
+      ['==', ['get', 'color'], selectedGroup.color], 0.9,
+      0.05,
+    ]);
+    map.setPaintProperty('lines-layer', 'line-width', [
+      'case',
+      ['==', ['get', 'color'], selectedGroup.color], 3,
+      1,
+    ]);
+  } else {
+    // Show everything
+    map.setFilter('trains-dot',   null);
+    map.setFilter('trains-glow',  null);
+    map.setFilter('trains-label', null);
+
+    map.setPaintProperty('lines-layer', 'line-opacity', 0.4);
+    map.setPaintProperty('lines-layer', 'line-width',   1.5);
+  }
+}
+
+function updateInfoPanel() {
+  const panel = document.getElementById('line-info');
+
+  if (!selectedGroup) {
+    panel.classList.add('hidden');
+    return;
+  }
+
+  // Count trains that belong to this line group
+  const groupTrains = targetFeatures.filter(f =>
+    selectedGroup.routes.includes(f.properties.route)
+  );
+
+  // Northbound = stopId ends in "N", southbound = "S"
+  const northbound = groupTrains.filter(f => (f.properties.stopId || '').endsWith('N')).length;
+  const southbound = groupTrains.filter(f => (f.properties.stopId || '').endsWith('S')).length;
+
+  document.getElementById('line-info-name').textContent  = selectedGroup.label;
+  document.getElementById('line-info-name').style.color  = selectedGroup.color;
+  document.getElementById('line-info-count').textContent = groupTrains.length;
+  document.getElementById('line-info-north').textContent = northbound;
+  document.getElementById('line-info-south').textContent = southbound;
+
+  panel.classList.remove('hidden');
 }
 
 // ── Error display ────────────────────────────────────────────────────────
