@@ -4,35 +4,26 @@
    Dark background, glowing coloured dots, minimal chrome.
    ===================================================================== */
 
-/* Reset browser defaults */
-*, *::before, *::after {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
 body {
   background: #0a0a0f;
   color: #ffffff;
   font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', 'Inter', sans-serif;
-  overflow: hidden; /* Map fills the window */
+  overflow: hidden;
 }
 
 /* ── Map ────────────────────────────────────────────────────────────── */
 
-#map {
-  position: absolute;
-  inset: 0; /* shorthand for top:0; right:0; bottom:0; left:0 */
-}
+#map { position: absolute; inset: 0; }
 
-/* ── Info panel (top-left) ──────────────────────────────────────────── */
+/* ── Info panel ─────────────────────────────────────────────────────── */
 
 #panel {
   position: absolute;
-  top: 20px;
-  left: 20px;
+  top: 20px; left: 20px;
   z-index: 10;
-  width: 210px;
+  width: 215px;
   padding: 16px;
   background: rgba(8, 8, 14, 0.82);
   backdrop-filter: blur(16px);
@@ -58,10 +49,8 @@ body {
   color: rgba(255, 255, 255, 0.45);
 }
 
-/* The pulsing green dot that shows the feed is live */
 #live-dot {
-  width: 7px;
-  height: 7px;
+  width: 7px; height: 7px;
   border-radius: 50%;
   background: #4ade80;
   box-shadow: 0 0 6px #4ade80, 0 0 12px rgba(74, 222, 128, 0.4);
@@ -74,8 +63,7 @@ body {
 }
 
 #panel-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13px; font-weight: 600;
   letter-spacing: 0.02em;
   color: rgba(255, 255, 255, 0.85);
 }
@@ -87,8 +75,7 @@ body {
 }
 
 #train-count {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 22px; font-weight: 700;
   color: rgba(255, 255, 255, 0.9);
   font-variant-numeric: tabular-nums;
 }
@@ -98,11 +85,10 @@ body {
 #legend {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  margin-bottom: 14px;
-  padding-top: 2px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  gap: 2px;
+  margin-bottom: 10px;
   padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .legend-row {
@@ -119,38 +105,23 @@ body {
   user-select: none;
 }
 
-.legend-row:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.legend-row.active {
-  background: rgba(255, 255, 255, 0.1);
-  color: rgba(255, 255, 255, 0.95);
-  opacity: 1 !important;
-}
-
-.legend-row.dimmed {
-  opacity: 0.25;
-}
+.legend-row:hover  { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.85); }
+.legend-row.active { background: rgba(255,255,255,0.1);  color: rgba(255,255,255,0.95); opacity: 1 !important; }
+.legend-row.dimmed { opacity: 0.22; }
 
 .legend-swatch {
-  width: 10px;
-  height: 10px;
+  width: 10px; height: 10px;
   border-radius: 50%;
   flex-shrink: 0;
-  /* box-shadow set inline via JS to match each line's colour */
 }
 
 /* ── Line info panel ────────────────────────────────────────────────── */
 
 #line-info {
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-top: 1px solid rgba(255,255,255,0.07);
   padding-top: 12px;
-  margin-top: 6px;
   margin-bottom: 10px;
 }
-
 #line-info.hidden { display: none; }
 
 #line-info-header {
@@ -160,131 +131,119 @@ body {
   margin-bottom: 9px;
 }
 
-#line-info-name {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
+#line-info-name { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
 
 #line-info-close {
-  background: none;
-  border: none;
-  color: rgba(255, 255, 255, 0.3);
-  cursor: pointer;
-  font-size: 11px;
-  padding: 2px 5px;
-  border-radius: 4px;
-  line-height: 1;
+  background: none; border: none;
+  color: rgba(255,255,255,0.3);
+  cursor: pointer; font-size: 11px;
+  padding: 2px 5px; border-radius: 4px; line-height: 1;
   transition: color 0.15s, background 0.15s;
 }
+#line-info-close:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.08); }
 
-#line-info-close:hover {
-  color: rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.08);
-}
-
-#line-info-stats {
-  display: flex;
-  gap: 6px;
-}
+#line-info-stats { display: flex; gap: 6px; }
 
 .stat-item {
-  flex: 1;
-  text-align: center;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  flex: 1; text-align: center;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.06);
   border-radius: 8px;
   padding: 7px 4px 6px;
 }
 
 .stat-value {
-  font-size: 18px;
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.9);
+  font-size: 18px; font-weight: 700;
+  color: rgba(255,255,255,0.9);
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 
 .stat-label {
   font-size: 8px;
-  color: rgba(255, 255, 255, 0.35);
+  color: rgba(255,255,255,0.35);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   margin-top: 3px;
 }
 
-/* ── Last updated timestamp ─────────────────────────────────────────── */
+/* ── Line history ───────────────────────────────────────────────────── */
+
+#line-history {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+#line-history.hidden { display: none; }
+
+#line-history-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(255,255,255,0.55);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 5px;
+}
+
+#line-history-text {
+  font-size: 10px;
+  color: rgba(255,255,255,0.45);
+  line-height: 1.55;
+}
+
+/* ── Footer row (timestamp + refresh) ──────────────────────────────── */
+
+#footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
 
 #last-updated {
   font-size: 9px;
-  color: rgba(255, 255, 255, 0.25);
+  color: rgba(255,255,255,0.25);
   letter-spacing: 0.02em;
 }
+
+#refresh-btn {
+  background: none; border: none;
+  color: rgba(255,255,255,0.3);
+  cursor: pointer; font-size: 14px;
+  padding: 2px 4px; border-radius: 4px; line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+#refresh-btn:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.08); }
 
 /* ── Hover tooltip ──────────────────────────────────────────────────── */
 
 #tooltip {
-  position: fixed;  /* fixed so it follows the cursor regardless of scroll */
-  z-index: 100;
-  pointer-events: none; /* clicks pass through it to the map */
+  position: fixed; z-index: 100;
+  pointer-events: none;
   background: rgba(8, 8, 14, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255,255,255,0.12);
   border-radius: 10px;
-  padding: 10px 13px;
-  min-width: 140px;
+  padding: 10px 13px; min-width: 140px;
   transition: opacity 0.1s ease;
 }
-
 #tooltip.hidden { opacity: 0; }
 
-#tooltip-line {
-  font-size: 15px;
-  font-weight: 700;
-  margin-bottom: 3px;
-  /* colour set inline by JS to match the line */
-}
-
-#tooltip-status {
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.45);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  margin-bottom: 2px;
-}
-
-#tooltip-stop {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.8);
-  line-height: 1.4;
-}
+#tooltip-line   { font-size: 15px; font-weight: 700; margin-bottom: 3px; }
+#tooltip-status { font-size: 10px; color: rgba(255,255,255,0.45); text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px; }
+#tooltip-stop   { font-size: 12px; color: rgba(255,255,255,0.8); line-height: 1.4; }
 
 /* ── Error banner ───────────────────────────────────────────────────── */
 
 #error-banner {
-  position: absolute;
-  bottom: 24px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%);
   z-index: 20;
-  background: rgba(220, 38, 38, 0.88);
-  border: 1px solid rgba(255, 100, 100, 0.3);
-  border-radius: 8px;
-  padding: 9px 16px;
-  font-size: 12px;
-  color: #fff;
-  max-width: 400px;
-  text-align: center;
+  background: rgba(220,38,38,0.88);
+  border: 1px solid rgba(255,100,100,0.3);
+  border-radius: 8px; padding: 9px 16px;
+  font-size: 12px; color: #fff; max-width: 400px; text-align: center;
 }
-
 #error-banner.hidden { display: none; }
 
-/* ── Mapbox attribution (keep it subtle) ────────────────────────────── */
+/* ── Mapbox attribution ─────────────────────────────────────────────── */
 
-.mapboxgl-ctrl-attrib {
-  background: rgba(0, 0, 0, 0.4) !important;
-  border-radius: 4px;
-}
-
-.mapboxgl-ctrl-attrib a {
-  color: rgba(255, 255, 255, 0.4) !important;
-}
+.mapboxgl-ctrl-attrib              { background: rgba(0,0,0,0.4) !important; border-radius: 4px; }
+.mapboxgl-ctrl-attrib a            { color: rgba(255,255,255,0.4) !important; }
