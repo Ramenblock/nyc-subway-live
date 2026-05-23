@@ -65,6 +65,7 @@ let liveTrains     = [];
 let targetFeatures = [];
 let selectedGroups = new Set();
 let heatmapActive  = false;
+let activePopup    = null;
 
 // ── Initialise Mapbox ────────────────────────────────────────────────────
 
@@ -107,10 +108,17 @@ function setupMapLayers() {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
   });
+  // Wide blurred layer underneath — gives each route a glowing tube feel
+  map.addLayer({
+    id: 'lines-glow', type: 'line', source: 'lines-source',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint:  { 'line-color': ['get', 'color'], 'line-width': 18, 'line-opacity': 0.1, 'line-blur': 5 },
+  });
+  // Crisp line on top
   map.addLayer({
     id: 'lines-layer', type: 'line', source: 'lines-source',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint:  { 'line-color': ['get', 'color'], 'line-width': 2.5, 'line-opacity': 0.6 },
+    paint:  { 'line-color': ['get', 'color'], 'line-width': 3.5, 'line-opacity': 0.85 },
   });
 
   // Station dots
@@ -215,6 +223,49 @@ function setupMapLayers() {
   });
   map.on('mousemove',  'trains-dot', (e) => { positionTooltip(e.originalEvent); renderTooltip(e.features[0].properties); });
   map.on('mouseleave', 'trains-dot', () => { map.getCanvas().style.cursor = ''; document.getElementById('tooltip').classList.add('hidden'); });
+
+  // Click a train → popup with next-stop info
+  map.on('click', 'trains-dot', (e) => {
+    const props  = e.features[0].properties;
+    const coords = e.features[0].geometry.coordinates.slice();
+    const nowSec = Date.now() / 1000;
+
+    let arrivalText = '—';
+    if (props.arrivalTime) {
+      const mins = Math.round((props.arrivalTime - nowSec) / 60);
+      arrivalText = mins <= 0 ? 'Arriving now' : `${mins} min`;
+    }
+
+    const statusLabel = STATUS_LABELS[props.status] || 'Near';
+
+    const html = `
+      <div class="train-popup">
+        <div class="tp-header">
+          <div class="tp-badge" style="background:${props.color}">${props.route}</div>
+          <div class="tp-title">${props.direction ? props.direction + ' ' : ''}Line ${props.route}</div>
+        </div>
+        <div class="tp-row">
+          <span class="tp-label">${statusLabel}</span>
+          <span class="tp-value">${props.stopName}</span>
+        </div>
+        <div class="tp-divider"></div>
+        <div class="tp-row">
+          <span class="tp-label">Next stop</span>
+          <span class="tp-value">${props.nextStopName}</span>
+        </div>
+        <div class="tp-row">
+          <span class="tp-label">Arriving in</span>
+          <span class="tp-value tp-arrival" style="color:${props.color}">${arrivalText}</span>
+        </div>
+      </div>
+    `;
+
+    if (activePopup) activePopup.remove();
+    activePopup = new mapboxgl.Popup({ closeButton: true, closeOnClick: true, offset: 16, className: 'train-popup-wrap' })
+      .setLngLat(coords)
+      .setHTML(html)
+      .addTo(map);
+  });
 }
 
 // ── Glow pulse animation ─────────────────────────────────────────────────
@@ -478,13 +529,16 @@ function renderLivePositions() {
       type: 'Feature',
       geometry:   { type: 'Point', coordinates: [lon, lat] },
       properties: {
-        id:        train.id,
-        route:     train.routeId,
-        color:     train.color,
-        stopId:    train.stopId,
-        status:    train.currentStatus,
-        stopName:  lookupStop(train.stopId)?.name || train.stopId || '—',
+        id:          train.id,
+        route:       train.routeId,
+        color:       train.color,
+        stopId:      train.stopId,
+        status:      train.currentStatus,
+        stopName:    lookupStop(train.stopId)?.name || train.stopId || '—',
         direction,
+        nextStopId:  train.nextStopId  || '',
+        nextStopName: (train.nextStopId && lookupStop(train.nextStopId)?.name) || '—',
+        arrivalTime: train.arrivalTime || 0,
       },
     });
   }
@@ -600,12 +654,16 @@ function updateMapFilters() {
     layerIds.forEach(id => map.setFilter(id, f));
 
     const selColors = [...new Set([...selectedGroups].map(g => g.color))];
-    map.setPaintProperty('lines-layer', 'line-opacity', ['case', ['in', ['get', 'color'], ['literal', selColors]], 0.9, 0.05]);
-    map.setPaintProperty('lines-layer', 'line-width',   ['case', ['in', ['get', 'color'], ['literal', selColors]], 4,   1  ]);
+    map.setPaintProperty('lines-layer', 'line-opacity', ['case', ['in', ['get', 'color'], ['literal', selColors]], 0.95, 0.05]);
+    map.setPaintProperty('lines-layer', 'line-width',   ['case', ['in', ['get', 'color'], ['literal', selColors]], 4.5,  1  ]);
+    map.setPaintProperty('lines-glow',  'line-opacity', ['case', ['in', ['get', 'color'], ['literal', selColors]], 0.18, 0.02]);
+    map.setPaintProperty('lines-glow',  'line-width',   ['case', ['in', ['get', 'color'], ['literal', selColors]], 22,   6  ]);
   } else {
     layerIds.forEach(id => map.setFilter(id, null));
-    map.setPaintProperty('lines-layer', 'line-opacity', 0.6);
-    map.setPaintProperty('lines-layer', 'line-width',   2.5);
+    map.setPaintProperty('lines-layer', 'line-opacity', 0.85);
+    map.setPaintProperty('lines-layer', 'line-width',   3.5);
+    map.setPaintProperty('lines-glow',  'line-opacity', 0.1);
+    map.setPaintProperty('lines-glow',  'line-width',   18);
   }
 }
 
