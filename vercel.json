@@ -7,8 +7,5 @@
         { "key": "Access-Control-Allow-Origin", "value": "*" }
       ]
     }
-  ],
-  "functions": {
-    "api/lines.js": { "maxDuration": 30 }
-  }
+  ]
 }
