@@ -1,34 +1,31 @@
 /**
  * app.js — NYC Subway Live
  *
- * What this file does:
- *   1.  Initialises a Mapbox dark map of New York City
- *   2.  Draws subway route lines from /api/lines
- *   3.  Draws station dots from /api/stops
- *   4.  Polls /api/subway every 15 s for live train + schedule data
- *   5.  Every 1 s, re-computes each train's position by interpolating
- *       between its previous and next stop using the MTA schedule times
- *       → trains move smoothly across the map in real time
- *   6.  Shows ↑/↓ direction arrows on each dot
- *   7.  Interactive legend — click one or more line groups to filter;
- *       an info panel shows live counts + historical facts per line
- *   8.  Manual refresh button
+ * Layers (bottom to top):
+ *   lines-layer      — static route paths fetched from NYC Open Data
+ *   trails-layer     — faint glow from each train's last stop → current position
+ *   stops-layer      — station dots
+ *   trains-glow      — pulsing halo behind each train
+ *   trains-dot       — solid coloured circle
+ *   trains-label     — route letter (zoom ≥ 12)
+ *   trains-direction — ↑/↓ arrow (zoom ≥ 11)
+ *   trains-heat      — heatmap density view (hidden by default, toggle-able)
  */
 
 const MAPBOX_TOKEN = 'pk.eyJ1IjoibWFyd2FucmFtZW4iLCJhIjoiY21wZ2l4czVmMG4xbDJyb2dzMmFyYjA5OCJ9.QxR5lT7I37MZyDSdhgINBQ';
 
 // ── Official MTA line colours ────────────────────────────────────────────
 const LINE_COLORS = {
-  '1':  '#EE352E', '2':  '#EE352E', '3':  '#EE352E',
-  '4':  '#00933C', '5':  '#00933C', '6':  '#00933C', '6X': '#00933C',
-  '7':  '#B933AD', '7X': '#B933AD',
-  'A':  '#0039A6', 'C':  '#0039A6', 'E':  '#0039A6',
-  'B':  '#FF6319', 'D':  '#FF6319', 'F':  '#FF6319', 'FX': '#FF6319', 'M': '#FF6319',
-  'G':  '#6CBE45',
-  'J':  '#996633', 'Z':  '#996633',
-  'L':  '#A7A9AC',
-  'N':  '#FCCC0A', 'Q':  '#FCCC0A', 'R':  '#FCCC0A', 'W': '#FCCC0A',
-  'S':  '#808183', 'GS': '#808183', 'FS': '#808183', 'H': '#808183',
+  '1': '#EE352E', '2': '#EE352E', '3': '#EE352E',
+  '4': '#00933C', '5': '#00933C', '6': '#00933C', '6X': '#00933C',
+  '7': '#B933AD', '7X': '#B933AD',
+  'A': '#0039A6', 'C': '#0039A6', 'E': '#0039A6',
+  'B': '#FF6319', 'D': '#FF6319', 'F': '#FF6319', 'FX': '#FF6319', 'M': '#FF6319',
+  'G': '#6CBE45',
+  'J': '#996633', 'Z': '#996633',
+  'L': '#A7A9AC',
+  'N': '#FCCC0A', 'Q': '#FCCC0A', 'R': '#FCCC0A', 'W': '#FCCC0A',
+  'S': '#808183', 'GS': '#808183', 'FS': '#808183', 'H': '#808183',
   'SI': '#0039A6',
 };
 
@@ -47,68 +44,35 @@ const LINE_GROUPS = [
   { id: 'si',   label: 'Staten Island',color: '#0039A6', routes: ['SI']                  },
 ];
 
-// ── Historical facts shown in the info panel ─────────────────────────────
+// ── Historical facts for the info panel ─────────────────────────────────
 const LINE_HISTORY = {
-  '123': {
-    title: '7th Avenue Line',
-    text: 'Part of New York\'s first subway, opened 1904. The 1 is the West Side local; the 2 and 3 run express on the same tracks through the Bronx and Brooklyn. Together they carry nearly 700,000 riders a day.',
-  },
-  '456': {
-    title: 'Lexington Avenue Line',
-    text: 'The busiest rapid-transit corridor in the Western Hemisphere — over 1.3 million daily riders. The 4 and 5 run express while the 6 runs local. The tracks follow the path of an 1878 elevated railway.',
-  },
-  '7': {
-    title: 'Flushing Line',
-    text: 'Nicknamed "The International Express" by the White House in 1999 for the dozens of immigrant communities it threads through Queens. The western terminus at Hudson Yards, opened 2015, is NYC\'s newest subway station.',
-  },
-  'ace': {
-    title: '8th Avenue Line',
-    text: 'Duke Ellington immortalised it in 1941: "Take the A Train." The A is one of NYC\'s longest routes — from Inwood in upper Manhattan to the Rockaways on the Atlantic, 31 miles end to end.',
-  },
-  'bdfm': {
-    title: '6th Avenue & Concourse Lines',
-    text: 'The F holds the record as NYC\'s longest single route at 37.5 miles. The B and D travel the Grand Concourse in the Bronx — a boulevard modelled on the Champs-Élysées. These IND lines were built by the city in the 1930s to break the private transit monopoly.',
-  },
-  'g': {
-    title: 'Crosstown Line',
-    text: 'The only line that never touches Manhattan, linking Brooklyn and Queens through what was once industrial waterfront. Famous for running the shortest trains in the system — 4 cars versus the standard 8 or 10.',
-  },
-  'jz': {
-    title: 'Nassau Street Line',
-    text: 'One of the few remaining elevated lines in NYC, rattling on century-old iron trestles above Jamaica Avenue. The Z runs rush-hours only in a skip-stop pattern, serving stations the J skips — a rare operating style.',
-  },
-  'l': {
-    title: 'Canarsie Line',
-    text: 'Runs entirely in a single tunnel between 8th Ave Manhattan and Canarsie Brooklyn. Scheduled for a 15-month shutdown after Hurricane Sandy flooding, but an innovative repair method allowed the work to be done without full closure.',
-  },
-  'nqrw': {
-    title: 'BMT Broadway Line',
-    text: 'Shares express and local tracks through Midtown before branching across Brooklyn and Queens. The Q travels the 2nd Avenue Subway — NYC\'s first new Manhattan line in 75 years, opened 2017.',
-  },
-  's': {
-    title: 'Shuttle Lines',
-    text: 'Three isolated shuttles: the 42nd St Shuttle (Times Sq ↔ Grand Central), the Franklin Ave Shuttle in Brooklyn, and the Rockaway Park Shuttle in Queens. Each is a remnant of a longer line truncated by service changes over the decades.',
-  },
-  'si': {
-    title: 'Staten Island Railway',
-    text: 'The only 24/7, above-ground, MetroCard-accepting commuter rail in the city. Runs from St. George terminal (connected to Manhattan by free ferry) to Tottenville, tracing the route of the original 1860 Staten Island Railway.',
-  },
+  '123': { title: '7th Avenue Line', text: 'Part of NYC\'s first subway, opened 1904. The 1 is the West Side local; the 2 and 3 run express through the Bronx and Brooklyn. Together they carry nearly 700,000 riders a day.' },
+  '456': { title: 'Lexington Avenue Line', text: 'The busiest rapid-transit corridor in the Western Hemisphere — over 1.3 million daily riders. The 4 and 5 run express, the 6 runs local, tracing the path of an 1878 elevated railway.' },
+  '7':   { title: 'Flushing Line', text: 'Nicknamed "The International Express" for the immigrant communities it threads through in Queens. The Hudson Yards terminus, opened 2015, is NYC\'s newest subway station.' },
+  'ace': { title: '8th Avenue Line', text: 'Duke Ellington immortalised it in 1941: "Take the A Train." The A is one of NYC\'s longest routes — 31 miles from Inwood to the Rockaways on the Atlantic Ocean.' },
+  'bdfm':{ title: '6th Avenue & Concourse Lines', text: 'The F holds the record as NYC\'s longest route at 37.5 miles. The B and D travel the Grand Concourse — a boulevard modelled on the Champs-Élysées. Built by the city in the 1930s to break the private transit monopoly.' },
+  'g':   { title: 'Crosstown Line', text: 'The only line that never touches Manhattan, linking Brooklyn and Queens through former industrial waterfront. Famous for running the shortest trains in the system — 4 cars vs the standard 8 or 10.' },
+  'jz':  { title: 'Nassau Street Line', text: 'One of the few remaining elevated lines in NYC, rattling on century-old iron trestles above Jamaica Avenue. The Z runs rush-hours only in a skip-stop pattern, serving stations the J skips.' },
+  'l':   { title: 'Canarsie Line', text: 'Runs in a single tunnel from 8th Ave Manhattan to Canarsie Brooklyn. Faced a 15-month closure after Hurricane Sandy flooding, but an innovative repair method avoided a full shutdown.' },
+  'nqrw':{ title: 'BMT Broadway Line', text: 'Shares express and local tracks through Midtown before branching across Brooklyn and Queens. The Q travels the 2nd Avenue Subway — NYC\'s first new Manhattan line in 75 years, opened 2017.' },
+  's':   { title: 'Shuttle Lines', text: 'Three isolated shuttles: 42nd St (Times Sq ↔ Grand Central), Franklin Ave in Brooklyn, and Rockaway Park in Queens. Each is a remnant of a longer line truncated by decades of service changes.' },
+  'si':  { title: 'Staten Island Railway', text: 'The only 24/7, MetroCard-accepting commuter rail in the city. Runs from St. George (connected to Manhattan by free ferry) to Tottenville, tracing the route of the original 1860 Staten Island Railway.' },
 };
 
 // ── State ────────────────────────────────────────────────────────────────
 let map;
-let stops       = {};      // stop_id → { name, lat, lon }
-let liveTrains  = [];      // latest processed train objects
-let targetFeatures = [];   // GeoJSON features from last render (for stats)
-let selectedGroups = new Set(); // currently selected LINE_GROUPS entries
+let stops          = {};
+let liveTrains     = [];
+let targetFeatures = [];
+let selectedGroups = new Set();
+let heatmapActive  = false;
 
 // ── Initialise Mapbox ────────────────────────────────────────────────────
 
 if (!MAPBOX_TOKEN || MAPBOX_TOKEN === 'YOUR_MAPBOX_TOKEN_HERE') {
-  showError('⚠️ Mapbox token not set. Open app.js and replace the placeholder.');
+  showError('⚠️ Mapbox token not set.');
 } else {
   mapboxgl.accessToken = MAPBOX_TOKEN;
-
   map = new mapboxgl.Map({
     container: 'map',
     style:     'mapbox://styles/mapbox/dark-v11',
@@ -118,32 +82,28 @@ if (!MAPBOX_TOKEN || MAPBOX_TOKEN === 'YOUR_MAPBOX_TOKEN_HERE') {
     maxZoom:   18,
     antialias: true,
   });
-
   map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'bottom-right');
   map.on('load', onMapLoad);
 }
 
-// ── Startup sequence ─────────────────────────────────────────────────────
+// ── Startup ──────────────────────────────────────────────────────────────
 
 async function onMapLoad() {
   setupMapLayers();
   buildLegend();
+  startGlowPulse();
 
-  // Load static data and first live snapshot in parallel
   await Promise.all([loadLines(), loadStops()]);
   await fetchAndUpdateTrains();
 
-  // Poll for new data every 15 s
   setInterval(fetchAndUpdateTrains, 15000);
-
-  // Re-render positions every 1 s using schedule interpolation
   setInterval(renderLivePositions, 1000);
 }
 
 // ── Map layers ───────────────────────────────────────────────────────────
 
 function setupMapLayers() {
-  // Route lines — drawn first so trains sit on top
+  // Route paths (loaded from NYC Open Data)
   map.addSource('lines-source', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
@@ -151,7 +111,23 @@ function setupMapLayers() {
   map.addLayer({
     id: 'lines-layer', type: 'line', source: 'lines-source',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint:  { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.4 },
+    paint:  { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.35 },
+  });
+
+  // Train trails — line from last stop to current position
+  map.addSource('trails-source', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] },
+  });
+  map.addLayer({
+    id: 'trails-layer', type: 'line', source: 'trails-source',
+    layout: { 'line-join': 'round', 'line-cap': 'round' },
+    paint: {
+      'line-color':   ['get', 'color'],
+      'line-width':   ['interpolate', ['linear'], ['zoom'], 9, 1.5, 14, 3.5],
+      'line-opacity': 0.45,
+      'line-blur':    1,
+    },
   });
 
   // Station dots
@@ -169,19 +145,19 @@ function setupMapLayers() {
     },
   });
 
-  // Train source (shared by all train layers)
+  // Train source shared by all train layers
   map.addSource('trains-source', {
     type: 'geojson',
     data: { type: 'FeatureCollection', features: [] },
   });
 
-  // Glow halo
+  // Glow halo (opacity animated by startGlowPulse)
   map.addLayer({
     id: 'trains-glow', type: 'circle', source: 'trains-source',
     paint: {
-      'circle-radius':  ['interpolate', ['linear'], ['zoom'], 9, 10, 14, 22],
+      'circle-radius':  ['interpolate', ['linear'], ['zoom'], 9, 11, 14, 24],
       'circle-color':   ['get', 'color'],
-      'circle-opacity': 0.25,
+      'circle-opacity': 0.2,
       'circle-blur':    1,
     },
   });
@@ -197,7 +173,7 @@ function setupMapLayers() {
     },
   });
 
-  // Route letter label (zoom 12+)
+  // Route letter label (zoom ≥ 12)
   map.addLayer({
     id: 'trains-label', type: 'symbol', source: 'trains-source',
     minzoom: 12,
@@ -208,14 +184,10 @@ function setupMapLayers() {
       'text-allow-overlap':    true,
       'text-ignore-placement': true,
     },
-    paint: {
-      'text-color':      '#ffffff',
-      'text-halo-color': ['get', 'color'],
-      'text-halo-width': 1,
-    },
+    paint: { 'text-color': '#fff', 'text-halo-color': ['get', 'color'], 'text-halo-width': 1 },
   });
 
-  // Direction arrow above each dot (zoom 11+)
+  // Direction arrow (zoom ≥ 11)
   map.addLayer({
     id: 'trains-direction', type: 'symbol', source: 'trains-source',
     minzoom: 11,
@@ -227,9 +199,27 @@ function setupMapLayers() {
       'text-allow-overlap':    true,
       'text-ignore-placement': true,
     },
+    paint: { 'text-color': '#fff', 'text-opacity': 0.7 },
+  });
+
+  // Heatmap — hidden by default, shown via toggleHeatmap()
+  map.addLayer({
+    id: 'trains-heat', type: 'heatmap', source: 'trains-source',
+    layout: { visibility: 'none' },
     paint: {
-      'text-color':   '#ffffff',
-      'text-opacity': 0.7,
+      'heatmap-weight':     1,
+      'heatmap-intensity':  ['interpolate', ['linear'], ['zoom'], 9, 1.5, 14, 4],
+      'heatmap-radius':     ['interpolate', ['linear'], ['zoom'], 9, 25, 14, 40],
+      'heatmap-opacity':    0.85,
+      'heatmap-color': [
+        'interpolate', ['linear'], ['heatmap-density'],
+        0,   'rgba(0,0,0,0)',
+        0.15,'rgba(0,57,166,0.6)',    // blue
+        0.4, 'rgba(185,51,173,0.75)',  // purple
+        0.65,'rgba(238,53,46,0.85)',  // red
+        0.85,'rgba(252,204,10,0.95)', // yellow
+        1,   'rgba(255,255,255,1)',    // white-hot
+      ],
     },
   });
 
@@ -240,29 +230,104 @@ function setupMapLayers() {
     renderTooltip(e.features[0].properties);
     document.getElementById('tooltip').classList.remove('hidden');
   });
-  map.on('mousemove', 'trains-dot', (e) => {
-    positionTooltip(e.originalEvent);
-    renderTooltip(e.features[0].properties);
-  });
-  map.on('mouseleave', 'trains-dot', () => {
-    map.getCanvas().style.cursor = '';
-    document.getElementById('tooltip').classList.add('hidden');
-  });
+  map.on('mousemove',  'trains-dot', (e) => { positionTooltip(e.originalEvent); renderTooltip(e.features[0].properties); });
+  map.on('mouseleave', 'trains-dot', () => { map.getCanvas().style.cursor = ''; document.getElementById('tooltip').classList.add('hidden'); });
 }
 
-// ── Load subway route lines ──────────────────────────────────────────────
+// ── Glow pulse animation ─────────────────────────────────────────────────
+// Gently oscillates the train halo opacity to give the map a breathing feel.
+
+function startGlowPulse() {
+  let t = 0;
+  function frame() {
+    t += 0.018;
+    const opacity = 0.15 + 0.12 * Math.sin(t); // oscillates 0.03 – 0.27
+    if (map.getLayer('trains-glow')) {
+      map.setPaintProperty('trains-glow', 'circle-opacity', opacity);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+// ── Load subway route lines (directly from NYC Open Data) ────────────────
+// Fetching from the browser avoids Vercel's 10-second serverless timeout.
 
 async function loadLines() {
+  const url = 'https://data.cityofnewyork.us/api/geospatial/3qem-6v3v?method=export&type=GeoJSON';
   try {
-    const res = await fetch('/api/lines');
+    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const geojson = await res.json();
-    if (geojson._error) console.warn('Lines API warning:', geojson._error);
+
+    // Assign MTA brand colours to each feature
+    for (const f of geojson.features) {
+      f.properties.color = resolveLineColor(f.properties);
+    }
+
     map.getSource('lines-source').setData(geojson);
     console.log(`Loaded ${geojson.features?.length || 0} subway line segments`);
   } catch (err) {
     console.warn('Could not load subway lines:', err.message);
+    // Non-fatal — trains still appear, just without route paths underneath
   }
+}
+
+/**
+ * Resolves an MTA brand colour from NYC Open Data feature properties.
+ * Tries rt_symbol first, then the line URL slug, then the name string.
+ */
+function resolveLineColor(props) {
+  const BY_SYMBOL = {
+    '1 2 3': '#EE352E', '1': '#EE352E', '2': '#EE352E', '3': '#EE352E',
+    '4 5 6': '#00933C', '4': '#00933C', '5': '#00933C', '6': '#00933C',
+    '7': '#B933AD',
+    'A C E': '#0039A6', 'A': '#0039A6', 'C': '#0039A6', 'E': '#0039A6',
+    'B D F M': '#FF6319', 'B': '#FF6319', 'D': '#FF6319', 'F': '#FF6319', 'M': '#FF6319',
+    'G': '#6CBE45',
+    'J Z': '#996633', 'J': '#996633', 'Z': '#996633',
+    'L': '#A7A9AC',
+    'N Q R W': '#FCCC0A', 'N': '#FCCC0A', 'Q': '#FCCC0A', 'R': '#FCCC0A', 'W': '#FCCC0A',
+    'S': '#808183', 'GS': '#808183', 'FS': '#808183', 'H': '#808183',
+    'SI': '#0039A6',
+  };
+
+  // 1. Try rt_symbol (exact or with different casing)
+  const sym = (props.rt_symbol || props.RT_SYMBOL || props.line || props.LINE || '').trim();
+  if (sym && BY_SYMBOL[sym]) return BY_SYMBOL[sym];
+
+  // 2. Try the MTA URL slug (e.g. "…/aline.htm" → A/C/E)
+  const url = (props.url || props.URL || '').toLowerCase();
+  if (url.includes('aline'))   return '#0039A6';
+  if (url.includes('bline'))   return '#FF6319';
+  if (url.includes('gline'))   return '#6CBE45';
+  if (url.includes('jline'))   return '#996633';
+  if (url.includes('lline'))   return '#A7A9AC';
+  if (url.includes('nline'))   return '#FCCC0A';
+  if (url.includes('123line')) return '#EE352E';
+  if (url.includes('456line')) return '#00933C';
+  if (url.includes('7line'))   return '#B933AD';
+  if (url.includes('sline'))   return '#808183';
+  if (url.includes('si'))      return '#0039A6';
+
+  // 3. Try the line name
+  const name = (props.name || props.NAME || '').toLowerCase();
+  if (name.includes('8 av') || name.includes('eighth'))               return '#0039A6';
+  if (name.includes('6 av') || name.includes('sixth') ||
+      name.includes('concourse') || name.includes('culver'))          return '#FF6319';
+  if (name.includes('crosstown'))                                      return '#6CBE45';
+  if (name.includes('nassau') || name.includes('jamaica'))             return '#996633';
+  if (name.includes('canarsie'))                                       return '#A7A9AC';
+  if (name.includes('flushing'))                                       return '#B933AD';
+  if (name.includes('broadway') && !name.includes('7th') &&
+      !name.includes('seventh'))                                       return '#FCCC0A';
+  if (name.includes('7th') || name.includes('seventh') ||
+      name.includes('7 av'))                                           return '#EE352E';
+  if (name.includes('lexington'))                                      return '#00933C';
+  if (name.includes('staten island') || name.includes('sir'))          return '#0039A6';
+  if (name.includes('shuttle'))                                        return '#808183';
+
+  return '#555566'; // unknown — dim but not invisible
 }
 
 // ── Load station coordinates ─────────────────────────────────────────────
@@ -275,10 +340,10 @@ async function loadStops() {
 
     const features = Object.entries(stops)
       .filter(([id]) => !/[NS]$/.test(id))
-      .map(([id, stop]) => ({
+      .map(([id, s]) => ({
         type: 'Feature',
-        geometry:   { type: 'Point', coordinates: [stop.lon, stop.lat] },
-        properties: { id, name: stop.name },
+        geometry:   { type: 'Point', coordinates: [s.lon, s.lat] },
+        properties: { id, name: s.name },
       }));
 
     map.getSource('stops-source').setData({ type: 'FeatureCollection', features });
@@ -297,10 +362,8 @@ async function fetchAndUpdateTrains() {
     const data = await res.json();
     if (data.error) throw new Error(data.error);
 
-    // Build the internal liveTrains array — one object per placeable train
     const trains = [];
     for (const v of data.vehicles) {
-      // Resolve fallback position from stop coordinates
       let lat = v.lat, lon = v.lon;
       if ((!lat || !lon) && v.stopId) {
         const s = lookupStop(v.stopId);
@@ -312,7 +375,7 @@ async function fetchAndUpdateTrains() {
         id:            v.id,
         routeId:       v.routeId,
         color:         LINE_COLORS[v.routeId] || '#888888',
-        stopId:        v.stopId   || '',
+        stopId:        v.stopId        || '',
         currentStatus: v.currentStatus,
         lat, lon,
         prevStopId:    v.prevStopId    || null,
@@ -323,8 +386,6 @@ async function fetchAndUpdateTrains() {
     }
 
     liveTrains = trains;
-
-    // Immediate render so the map updates right away
     renderLivePositions();
 
     document.getElementById('train-count').textContent = trains.length;
@@ -334,7 +395,6 @@ async function fetchAndUpdateTrains() {
     document.getElementById('error-banner').classList.add('hidden');
 
     if (selectedGroups.size > 0) updateInfoPanel();
-
   } catch (err) {
     console.error('Failed to fetch train data:', err.message);
     showError('Could not load live data. Retrying shortly…');
@@ -342,22 +402,20 @@ async function fetchAndUpdateTrains() {
 }
 
 // ── Live position rendering (every 1 s) ──────────────────────────────────
-// Uses the schedule data from the API to interpolate each train's position
-// between its previous and next stop based on real elapsed time.
 
 function renderLivePositions() {
-  const nowSec = Date.now() / 1000; // Unix timestamp in seconds
+  const nowSec  = Date.now() / 1000;
   const features = [];
+  const trailFeatures = [];
 
   for (const train of liveTrains) {
-    let lat = train.lat;
-    let lon = train.lon;
+    let lat = train.lat, lon = train.lon;
 
-    // If we have schedule data, compute interpolated position
+    // Schedule-based interpolation between stops
     if (train.prevStopId && train.nextStopId && train.departureTime && train.arrivalTime) {
-      const duration = train.arrivalTime - train.departureTime;
-      if (duration > 0 && duration < 600) { // sanity-check: trip leg < 10 min
-        const t = Math.max(0, Math.min(1, (nowSec - train.departureTime) / duration));
+      const dur = train.arrivalTime - train.departureTime;
+      if (dur > 0 && dur < 600) {
+        const t    = Math.max(0, Math.min(1, (nowSec - train.departureTime) / dur));
         const prev = lookupStop(train.prevStopId);
         const next = lookupStop(train.nextStopId);
         if (prev && next) {
@@ -369,8 +427,7 @@ function renderLivePositions() {
 
     if (!lat || !lon) continue;
 
-    // Derive direction from the stopId suffix (N = northbound, S = southbound)
-    const sid = train.stopId || '';
+    const sid       = train.stopId || '';
     const direction = sid.endsWith('N') ? '↑' : sid.endsWith('S') ? '↓' : '';
 
     features.push({
@@ -386,6 +443,26 @@ function renderLivePositions() {
         direction,
       },
     });
+
+    // Trail: faint line from the previous stop to the train's current position.
+    // Shows exactly how far the train has travelled in its current leg.
+    if (train.prevStopId) {
+      const prev = lookupStop(train.prevStopId);
+      if (prev) {
+        const dx = lon - prev.lon, dy = lat - prev.lat;
+        // Only draw if the train has meaningfully left the stop
+        if (dx * dx + dy * dy > 1e-7) {
+          trailFeatures.push({
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates: [[prev.lon, prev.lat], [lon, lat]],
+            },
+            properties: { color: train.color },
+          });
+        }
+      }
+    }
   }
 
   targetFeatures = features;
@@ -393,6 +470,28 @@ function renderLivePositions() {
   if (map.getSource('trains-source')) {
     map.getSource('trains-source').setData({ type: 'FeatureCollection', features });
   }
+  if (map.getSource('trails-source')) {
+    map.getSource('trails-source').setData({ type: 'FeatureCollection', features: trailFeatures });
+  }
+}
+
+// ── Heatmap toggle ────────────────────────────────────────────────────────
+
+function toggleHeatmap() {
+  heatmapActive = !heatmapActive;
+
+  const trainLayers = ['trains-glow', 'trains-dot', 'trains-label', 'trains-direction', 'trails-layer'];
+  const vis = heatmapActive ? 'none' : 'visible';
+  trainLayers.forEach(id => {
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
+  });
+  if (map.getLayer('trains-heat')) {
+    map.setLayoutProperty('trains-heat', 'visibility', heatmapActive ? 'visible' : 'none');
+  }
+
+  const btn = document.getElementById('heatmap-btn');
+  btn.classList.toggle('active', heatmapActive);
+  btn.textContent = heatmapActive ? '● Heat' : '◌ Heat';
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -407,10 +506,8 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 // ── Tooltip ──────────────────────────────────────────────────────────────
 
 const STATUS_LABELS = {
-  0: 'Incoming at',   1: 'Stopped at',    2: 'In transit to',
-  'INCOMING_AT':  'Incoming at',
-  'STOPPED_AT':   'Stopped at',
-  'IN_TRANSIT_TO':'In transit to',
+  0: 'Incoming at', 1: 'Stopped at', 2: 'In transit to',
+  'INCOMING_AT': 'Incoming at', 'STOPPED_AT': 'Stopped at', 'IN_TRANSIT_TO': 'In transit to',
 };
 
 function renderTooltip(props) {
@@ -423,12 +520,8 @@ function renderTooltip(props) {
 function positionTooltip(e) {
   const tip  = document.getElementById('tooltip');
   const rect = tip.getBoundingClientRect();
-  const left = (e.clientX + 14 + rect.width  > window.innerWidth)
-    ? e.clientX - rect.width  - 10 : e.clientX + 14;
-  const top  = (e.clientY - 10  + rect.height > window.innerHeight)
-    ? e.clientY - rect.height      : e.clientY - 10;
-  tip.style.left = left + 'px';
-  tip.style.top  = top  + 'px';
+  tip.style.left = ((e.clientX + 14 + rect.width > window.innerWidth)  ? e.clientX - rect.width - 10 : e.clientX + 14) + 'px';
+  tip.style.top  = ((e.clientY - 10 + rect.height > window.innerHeight) ? e.clientY - rect.height     : e.clientY - 10)  + 'px';
 }
 
 // ── Legend ───────────────────────────────────────────────────────────────
@@ -437,11 +530,8 @@ function buildLegend() {
   const legend = document.getElementById('legend');
 
   legend.innerHTML = LINE_GROUPS.map((g, i) => `
-    <div class="legend-row" data-index="${i}" title="Click to filter (hold to multi-select)">
-      <div class="legend-swatch" style="
-        background: ${g.color};
-        box-shadow: 0 0 5px ${g.color}, 0 0 10px ${g.color}55;
-      "></div>
+    <div class="legend-row" data-index="${i}">
+      <div class="legend-swatch" style="background:${g.color}; box-shadow:0 0 5px ${g.color},0 0 10px ${g.color}55;"></div>
       <span>${g.label}</span>
     </div>
   `).join('');
@@ -451,19 +541,15 @@ function buildLegend() {
   });
 
   document.getElementById('line-info-close').addEventListener('click', clearSelection);
-  document.getElementById('refresh-btn').addEventListener('click', () => {
-    fetchAndUpdateTrains();
-  });
+  document.getElementById('refresh-btn').addEventListener('click',  fetchAndUpdateTrains);
+  document.getElementById('heatmap-btn').addEventListener('click',  toggleHeatmap);
 }
 
 // ── Line selection (multi-select) ────────────────────────────────────────
 
 function toggleGroup(group) {
-  if (selectedGroups.has(group)) {
-    selectedGroups.delete(group);
-  } else {
-    selectedGroups.add(group);
-  }
+  if (selectedGroups.has(group)) selectedGroups.delete(group);
+  else                           selectedGroups.add(group);
   updateLegendState();
   updateMapFilters();
   updateInfoPanel();
@@ -479,57 +565,50 @@ function clearSelection() {
 function updateLegendState() {
   document.querySelectorAll('.legend-row').forEach((row, i) => {
     const g = LINE_GROUPS[i];
-    row.classList.toggle('active',  selectedGroups.has(g));
-    row.classList.toggle('dimmed',  selectedGroups.size > 0 && !selectedGroups.has(g));
+    row.classList.toggle('active', selectedGroups.has(g));
+    row.classList.toggle('dimmed', selectedGroups.size > 0 && !selectedGroups.has(g));
   });
 }
 
 function updateMapFilters() {
-  const layerIds = ['trains-dot', 'trains-glow', 'trains-label', 'trains-direction'];
+  const layerIds = ['trains-dot', 'trains-glow', 'trains-label', 'trains-direction', 'trails-layer'];
 
   if (selectedGroups.size > 0) {
-    const allRoutes = [...selectedGroups].flatMap(g => g.routes);
-    const f = ['in', ['get', 'route'], ['literal', allRoutes]];
+    const allRoutes  = [...selectedGroups].flatMap(g => g.routes);
+    const f          = ['in', ['get', 'route'], ['literal', allRoutes]];
     layerIds.forEach(id => map.setFilter(id, f));
-
+    // trails-layer filters on 'color', not 'route' — filter there by color
     const selColors = [...new Set([...selectedGroups].map(g => g.color))];
-    map.setPaintProperty('lines-layer', 'line-opacity', [
-      'case', ['in', ['get', 'color'], ['literal', selColors]], 0.9, 0.05,
-    ]);
-    map.setPaintProperty('lines-layer', 'line-width', [
-      'case', ['in', ['get', 'color'], ['literal', selColors]], 3, 1,
-    ]);
+    map.setFilter('trails-layer', ['in', ['get', 'color'], ['literal', selColors]]);
+
+    map.setPaintProperty('lines-layer', 'line-opacity', ['case', ['in', ['get', 'color'], ['literal', selColors]], 0.85, 0.05]);
+    map.setPaintProperty('lines-layer', 'line-width',   ['case', ['in', ['get', 'color'], ['literal', selColors]], 3,    1]);
   } else {
     layerIds.forEach(id => map.setFilter(id, null));
-    map.setPaintProperty('lines-layer', 'line-opacity', 0.4);
+    map.setFilter('trails-layer', null);
+    map.setPaintProperty('lines-layer', 'line-opacity', 0.35);
     map.setPaintProperty('lines-layer', 'line-width',   1.5);
   }
 }
 
 function updateInfoPanel() {
   const panel = document.getElementById('line-info');
-
-  if (selectedGroups.size === 0) {
-    panel.classList.add('hidden');
-    return;
-  }
+  if (selectedGroups.size === 0) { panel.classList.add('hidden'); return; }
 
   const allRoutes  = [...selectedGroups].flatMap(g => g.routes);
   const trains     = targetFeatures.filter(f => allRoutes.includes(f.properties.route));
   const northbound = trains.filter(f => (f.properties.stopId || '').endsWith('N')).length;
   const southbound = trains.filter(f => (f.properties.stopId || '').endsWith('S')).length;
+  const groups     = [...selectedGroups];
 
-  // Name: use first group's label if single selection, otherwise combined
   const nameEl = document.getElementById('line-info-name');
-  const groups  = [...selectedGroups];
-  nameEl.textContent  = groups.map(g => g.label).join(' + ');
-  nameEl.style.color  = groups.length === 1 ? groups[0].color : 'rgba(255,255,255,0.9)';
+  nameEl.textContent = groups.map(g => g.label).join(' + ');
+  nameEl.style.color = groups.length === 1 ? groups[0].color : 'rgba(255,255,255,0.9)';
 
   document.getElementById('line-info-count').textContent = trains.length;
   document.getElementById('line-info-north').textContent = northbound;
   document.getElementById('line-info-south').textContent = southbound;
 
-  // History: only shown for a single selected group
   const histEl = document.getElementById('line-history');
   if (groups.length === 1) {
     const hist = LINE_HISTORY[groups[0].id];
@@ -537,19 +616,15 @@ function updateInfoPanel() {
       document.getElementById('line-history-title').textContent = hist.title;
       document.getElementById('line-history-text').textContent  = hist.text;
       histEl.classList.remove('hidden');
-    } else {
-      histEl.classList.add('hidden');
-    }
-  } else {
-    histEl.classList.add('hidden');
-  }
+    } else { histEl.classList.add('hidden'); }
+  } else { histEl.classList.add('hidden'); }
 
   panel.classList.remove('hidden');
 }
 
 // ── Error display ────────────────────────────────────────────────────────
 
-function showError(message) {
-  document.getElementById('error-message').textContent = message;
+function showError(msg) {
+  document.getElementById('error-message').textContent = msg;
   document.getElementById('error-banner').classList.remove('hidden');
 }
