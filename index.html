@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NYC Subway Live</title>
 
-  <!-- Mapbox GL JS — the map engine that renders the dark map -->
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.css" rel="stylesheet">
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.4.0/mapbox-gl.js"></script>
 
@@ -13,7 +12,6 @@
 </head>
 <body>
 
-  <!-- The map fills the entire page -->
   <div id="map"></div>
 
   <!-- Top-left info panel -->
@@ -31,10 +29,10 @@
       <span id="train-count-label"> trains active</span>
     </div>
 
-    <!-- One row per line group, coloured to match — click to filter -->
+    <!-- Legend — click rows to filter (multi-select supported) -->
     <div id="legend"></div>
 
-    <!-- Shown when a legend row is clicked — displays live stats for that line -->
+    <!-- Shown when one or more legend rows are selected -->
     <div id="line-info" class="hidden">
       <div id="line-info-header">
         <span id="line-info-name"></span>
@@ -54,19 +52,28 @@
           <div class="stat-label">↓ south</div>
         </div>
       </div>
+
+      <!-- History section — only shown when a single line is selected -->
+      <div id="line-history" class="hidden">
+        <div id="line-history-title"></div>
+        <div id="line-history-text"></div>
+      </div>
     </div>
 
-    <div id="last-updated"></div>
+    <div id="footer-row">
+      <div id="last-updated"></div>
+      <button id="refresh-btn" title="Refresh now">↻</button>
+    </div>
   </div>
 
-  <!-- Floating tooltip shown when hovering over a train -->
+  <!-- Hover tooltip -->
   <div id="tooltip" class="hidden">
     <div id="tooltip-line"></div>
     <div id="tooltip-status"></div>
     <div id="tooltip-stop"></div>
   </div>
 
-  <!-- Error banner shown at the bottom if data can't load -->
+  <!-- Error banner -->
   <div id="error-banner" class="hidden">
     <span id="error-message"></span>
   </div>
