@@ -234,103 +234,145 @@ function startGlowPulse() {
 }
 
 // ── Load subway route lines ──────────────────────────────────────────────
-// Tries our serverless endpoint first, then falls back to the NYC Open Data
-// Socrata REST API (which has reliable CORS headers).
+// Source: NYC OTI official ArcGIS Feature Service (the same dataset that
+// powers the City's own mapping tools).  Has proper WGS84 polylines and a
+// ROUTE integer code + LINE name we can colour-match against.
 
 async function loadLines() {
-  const sources = [
-    { url: '/api/lines',                                                            timeout: 9000  },
-    { url: 'https://data.cityofnewyork.us/resource/3qem-6v3v.geojson?$limit=5000', timeout: 20000 },
-  ];
+  // Try our own serverless function first (has the best geometry from GTFS)
+  try {
+    const res = await fetch('/api/lines', { signal: AbortSignal.timeout(9000) });
+    if (res.ok) {
+      const geojson = await res.json();
+      if (!geojson._error && geojson.features?.length > 0) {
+        for (const f of geojson.features) f.properties.color = resolveLineColor(f.properties);
+        map.getSource('lines-source').setData(geojson);
+        console.log(`[lines] ${geojson.features.length} features from /api/lines`);
+        return;
+      }
+    }
+  } catch (_) { /* fall through */ }
 
-  for (const { url, timeout } of sources) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(timeout) });
+  // Fall back: NYC official ArcGIS subway dataset (CORS-enabled, WGS84)
+  const ARCGIS_BASE =
+    'https://services6.arcgis.com/yG5s3afENB5iO9fj/arcgis/rest/services/Subway_view/FeatureServer/0/query';
+
+  try {
+    const allFeatures = [];
+    let offset = 0;
+
+    // Paginate in case the service caps results per request
+    while (true) {
+      const params = new URLSearchParams({
+        where: '1=1',
+        outFields: 'ROUTE,LINE,SUBWAY_LABEL',
+        outSR: '4326',
+        resultOffset: offset,
+        resultRecordCount: 2000,
+        f: 'geojson',
+      });
+      const res = await fetch(`${ARCGIS_BASE}?${params}`, { signal: AbortSignal.timeout(20000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      const geojson = await res.json();
-      const features = geojson.features || [];
+      const data = await res.json();
+      const features = data.features || [];
+      allFeatures.push(...features);
 
-      if (features.length === 0) throw new Error('Empty feature collection');
-
-      // Log for debugging — open browser DevTools → Console to inspect
-      console.log(`[subway lines] ${features.length} features from ${url}`);
-      if (features[0]) {
-        console.log('[subway lines] sample props:', JSON.stringify(features[0].properties));
-        const coords = features[0].geometry?.coordinates;
-        const firstPt = Array.isArray(coords?.[0]) ? coords[0] : coords;
-        console.log('[subway lines] sample coord:', JSON.stringify(firstPt));
-      }
-
-      for (const f of features) {
-        f.properties.color = resolveLineColor(f.properties);
-      }
-
-      map.getSource('lines-source').setData(geojson);
-      return; // success — stop trying further sources
-    } catch (err) {
-      console.warn(`[subway lines] failed (${url.startsWith('/') ? '/api/lines' : 'Open Data'}):`, err.message);
+      console.log(`[lines] ArcGIS offset=${offset} → ${features.length} features`);
+      if (!data.exceededTransferLimit || features.length === 0) break;
+      offset += 2000;
     }
-  }
 
-  console.error('[subway lines] All sources failed — route lines will not be shown');
+    if (allFeatures.length === 0) throw new Error('no features returned');
+
+    console.log(`[lines] total ${allFeatures.length} subway segments`);
+    if (allFeatures[0]) console.log('[lines] sample:', JSON.stringify(allFeatures[0].properties));
+
+    for (const f of allFeatures) f.properties.color = resolveLineColor(f.properties);
+    map.getSource('lines-source').setData({ type: 'FeatureCollection', features: allFeatures });
+  } catch (err) {
+    console.error('[lines] ArcGIS fallback failed:', err.message);
+  }
 }
 
 /**
- * Resolves an MTA brand colour from NYC Open Data feature properties.
- * Tries rt_symbol first, then the line URL slug, then the name string.
+ * Resolves an MTA brand colour from a GeoJSON feature's properties.
+ *
+ * Handles two data sources:
+ *   • ArcGIS Feature Service (primary): ROUTE is an integer code (1–85),
+ *     LINE is a text name like "8 Avenue" or "Lexington".
+ *   • Our /api/lines GTFS output: routeId is a letter like "A", "1", etc.
  */
 function resolveLineColor(props) {
-  const BY_SYMBOL = {
-    '1 2 3': '#EE352E', '1': '#EE352E', '2': '#EE352E', '3': '#EE352E',
-    '4 5 6': '#00933C', '4': '#00933C', '5': '#00933C', '6': '#00933C',
-    '7': '#B933AD',
-    'A C E': '#0039A6', 'A': '#0039A6', 'C': '#0039A6', 'E': '#0039A6',
-    'B D F M': '#FF6319', 'B': '#FF6319', 'D': '#FF6319', 'F': '#FF6319', 'M': '#FF6319',
-    'G': '#6CBE45',
-    'J Z': '#996633', 'J': '#996633', 'Z': '#996633',
-    'L': '#A7A9AC',
-    'N Q R W': '#FCCC0A', 'N': '#FCCC0A', 'Q': '#FCCC0A', 'R': '#FCCC0A', 'W': '#FCCC0A',
-    'S': '#808183', 'GS': '#808183', 'FS': '#808183', 'H': '#808183',
-    'SI': '#0039A6',
+  // ── 1. /api/lines GTFS output (routeId letter) ──────────────────────
+  const routeId = (props.routeId || '').trim();
+  if (routeId && LINE_COLORS[routeId]) return LINE_COLORS[routeId];
+
+  // ── 2. ArcGIS ROUTE integer code (1–85 coded domain) ────────────────
+  // Maps each code to the MTA colour that best represents that segment.
+  const ROUTE_CODE_COLORS = {
+    // 1 / 2 / 3  (red)
+    1:'#EE352E', 2:'#EE352E', 3:'#EE352E', 4:'#EE352E', 5:'#EE352E',
+    6:'#EE352E', 7:'#EE352E', 8:'#EE352E', 9:'#EE352E',10:'#EE352E',11:'#EE352E',
+    // 4 / 5 / 6  (green)
+    12:'#00933C',13:'#00933C',14:'#00933C',15:'#00933C',16:'#00933C',17:'#00933C',
+    // 7  (purple)
+    18:'#B933AD',19:'#B933AD',
+    // A / C / E and shared segments  (blue)
+    20:'#0039A6',21:'#0039A6',22:'#0039A6',23:'#0039A6',24:'#0039A6',
+    25:'#0039A6',26:'#0039A6',27:'#0039A6',28:'#0039A6',
+    41:'#0039A6',42:'#0039A6',43:'#0039A6',44:'#0039A6',45:'#0039A6',
+    46:'#0039A6',47:'#0039A6',79:'#0039A6',
+    // B / D / F / M and shared segments  (orange)
+    29:'#FF6319',30:'#FF6319',31:'#FF6319',32:'#FF6319',33:'#FF6319',
+    34:'#FF6319',35:'#FF6319',36:'#FF6319',37:'#FF6319',38:'#FF6319',
+    39:'#FF6319',40:'#FF6319',48:'#FF6319',50:'#FF6319',51:'#FF6319',
+    59:'#FF6319',60:'#FF6319',71:'#FF6319',74:'#FF6319',75:'#FF6319',
+    76:'#FF6319',77:'#FF6319',78:'#FF6319',80:'#FF6319',82:'#FF6319',
+    83:'#FF6319',84:'#FF6319',85:'#FF6319',
+    // G  (light green)
+    49:'#6CBE45',52:'#6CBE45',53:'#6CBE45',
+    // J / Z  (brown)
+    54:'#996633',55:'#996633',56:'#996633',57:'#996633',
+    // L  (grey)
+    58:'#A7A9AC',
+    // N / Q / R / W  (yellow)
+    61:'#FCCC0A',62:'#FCCC0A',63:'#FCCC0A',64:'#FCCC0A',65:'#FCCC0A',
+    66:'#FCCC0A',67:'#FCCC0A',68:'#FCCC0A',
+    // S shuttles  (grey)
+    69:'#808183',72:'#808183',73:'#808183',
+    // Staten Island Railway  (blue)
+    70:'#0039A6',
   };
 
-  // 1. Try rt_symbol (exact or with different casing)
-  const sym = (props.rt_symbol || props.RT_SYMBOL || props.line || props.LINE || '').trim();
-  if (sym && BY_SYMBOL[sym]) return BY_SYMBOL[sym];
+  const routeCode = props.ROUTE ?? props.route_code;
+  if (routeCode != null) {
+    const c = ROUTE_CODE_COLORS[Number(routeCode)];
+    if (c) return c;
+  }
 
-  // 2. Try the MTA URL slug (e.g. "…/aline.htm" → A/C/E)
-  const url = (props.url || props.URL || '').toLowerCase();
-  if (url.includes('aline'))   return '#0039A6';
-  if (url.includes('bline'))   return '#FF6319';
-  if (url.includes('gline'))   return '#6CBE45';
-  if (url.includes('jline'))   return '#996633';
-  if (url.includes('lline'))   return '#A7A9AC';
-  if (url.includes('nline'))   return '#FCCC0A';
-  if (url.includes('123line')) return '#EE352E';
-  if (url.includes('456line')) return '#00933C';
-  if (url.includes('7line'))   return '#B933AD';
-  if (url.includes('sline'))   return '#808183';
-  if (url.includes('si'))      return '#0039A6';
+  // ── 3. Name-based matching (ArcGIS LINE / SUBWAY_LABEL) ─────────────
+  const name = (props.LINE || props.SUBWAY_LABEL || props.name || props.NAME || '').toLowerCase();
+  if (!name) return '#888899';
 
-  // 3. Try the line name
-  const name = (props.name || props.NAME || '').toLowerCase();
-  if (name.includes('8 av') || name.includes('eighth'))               return '#0039A6';
+  if (name.includes('8 av') || name.includes('eighth') ||
+      name.includes('fulton') || name.includes('rockaway'))           return '#0039A6';
   if (name.includes('6 av') || name.includes('sixth') ||
-      name.includes('concourse') || name.includes('culver'))          return '#FF6319';
+      name.includes('concourse') || name.includes('culver') ||
+      name.includes('brighton'))                                       return '#FF6319';
   if (name.includes('crosstown'))                                      return '#6CBE45';
   if (name.includes('nassau') || name.includes('jamaica'))             return '#996633';
   if (name.includes('canarsie'))                                       return '#A7A9AC';
   if (name.includes('flushing'))                                       return '#B933AD';
-  if (name.includes('broadway') && !name.includes('7th') &&
-      !name.includes('seventh'))                                       return '#FCCC0A';
+  if (name.includes('broadway') &&
+      !name.includes('7th') && !name.includes('seventh'))             return '#FCCC0A';
   if (name.includes('7th') || name.includes('seventh') ||
       name.includes('7 av'))                                           return '#EE352E';
   if (name.includes('lexington'))                                      return '#00933C';
   if (name.includes('staten island') || name.includes('sir'))          return '#0039A6';
-  if (name.includes('shuttle'))                                        return '#808183';
+  if (name.includes('shuttle') || name.includes('42 st'))              return '#808183';
 
-  return '#555566'; // unknown — dim but not invisible
+  return '#888899'; // unknown — faintly visible fallback
 }
 
 // ── Load station coordinates ─────────────────────────────────────────────
