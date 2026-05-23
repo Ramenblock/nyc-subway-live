@@ -3,7 +3,6 @@
  *
  * Layers (bottom to top):
  *   lines-layer      — static route paths fetched from NYC Open Data
- *   trails-layer     — faint glow from each train's last stop → current position
  *   stops-layer      — station dots
  *   trains-glow      — pulsing halo behind each train
  *   trains-dot       — solid coloured circle
@@ -111,23 +110,7 @@ function setupMapLayers() {
   map.addLayer({
     id: 'lines-layer', type: 'line', source: 'lines-source',
     layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint:  { 'line-color': ['get', 'color'], 'line-width': 1.5, 'line-opacity': 0.35 },
-  });
-
-  // Train trails — line from last stop to current position
-  map.addSource('trails-source', {
-    type: 'geojson',
-    data: { type: 'FeatureCollection', features: [] },
-  });
-  map.addLayer({
-    id: 'trails-layer', type: 'line', source: 'trails-source',
-    layout: { 'line-join': 'round', 'line-cap': 'round' },
-    paint: {
-      'line-color':   ['get', 'color'],
-      'line-width':   ['interpolate', ['linear'], ['zoom'], 9, 1.5, 14, 3.5],
-      'line-opacity': 0.45,
-      'line-blur':    1,
-    },
+    paint:  { 'line-color': ['get', 'color'], 'line-width': 2.5, 'line-opacity': 0.6 },
   });
 
   // Station dots
@@ -250,27 +233,47 @@ function startGlowPulse() {
   requestAnimationFrame(frame);
 }
 
-// ── Load subway route lines (directly from NYC Open Data) ────────────────
-// Fetching from the browser avoids Vercel's 10-second serverless timeout.
+// ── Load subway route lines ──────────────────────────────────────────────
+// Tries our serverless endpoint first, then falls back to the NYC Open Data
+// Socrata REST API (which has reliable CORS headers).
 
 async function loadLines() {
-  const url = 'https://data.cityofnewyork.us/api/geospatial/3qem-6v3v?method=export&type=GeoJSON';
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const geojson = await res.json();
+  const sources = [
+    { url: '/api/lines',                                                            timeout: 9000  },
+    { url: 'https://data.cityofnewyork.us/resource/3qem-6v3v.geojson?$limit=5000', timeout: 20000 },
+  ];
 
-    // Assign MTA brand colours to each feature
-    for (const f of geojson.features) {
-      f.properties.color = resolveLineColor(f.properties);
+  for (const { url, timeout } of sources) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(timeout) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const geojson = await res.json();
+      const features = geojson.features || [];
+
+      if (features.length === 0) throw new Error('Empty feature collection');
+
+      // Log for debugging — open browser DevTools → Console to inspect
+      console.log(`[subway lines] ${features.length} features from ${url}`);
+      if (features[0]) {
+        console.log('[subway lines] sample props:', JSON.stringify(features[0].properties));
+        const coords = features[0].geometry?.coordinates;
+        const firstPt = Array.isArray(coords?.[0]) ? coords[0] : coords;
+        console.log('[subway lines] sample coord:', JSON.stringify(firstPt));
+      }
+
+      for (const f of features) {
+        f.properties.color = resolveLineColor(f.properties);
+      }
+
+      map.getSource('lines-source').setData(geojson);
+      return; // success — stop trying further sources
+    } catch (err) {
+      console.warn(`[subway lines] failed (${url.startsWith('/') ? '/api/lines' : 'Open Data'}):`, err.message);
     }
-
-    map.getSource('lines-source').setData(geojson);
-    console.log(`Loaded ${geojson.features?.length || 0} subway line segments`);
-  } catch (err) {
-    console.warn('Could not load subway lines:', err.message);
-    // Non-fatal — trains still appear, just without route paths underneath
   }
+
+  console.error('[subway lines] All sources failed — route lines will not be shown');
 }
 
 /**
@@ -406,7 +409,6 @@ async function fetchAndUpdateTrains() {
 function renderLivePositions() {
   const nowSec  = Date.now() / 1000;
   const features = [];
-  const trailFeatures = [];
 
   for (const train of liveTrains) {
     let lat = train.lat, lon = train.lon;
@@ -443,35 +445,12 @@ function renderLivePositions() {
         direction,
       },
     });
-
-    // Trail: faint line from the previous stop to the train's current position.
-    // Shows exactly how far the train has travelled in its current leg.
-    if (train.prevStopId) {
-      const prev = lookupStop(train.prevStopId);
-      if (prev) {
-        const dx = lon - prev.lon, dy = lat - prev.lat;
-        // Only draw if the train has meaningfully left the stop
-        if (dx * dx + dy * dy > 1e-7) {
-          trailFeatures.push({
-            type: 'Feature',
-            geometry: {
-              type: 'LineString',
-              coordinates: [[prev.lon, prev.lat], [lon, lat]],
-            },
-            properties: { color: train.color },
-          });
-        }
-      }
-    }
   }
 
   targetFeatures = features;
 
   if (map.getSource('trains-source')) {
     map.getSource('trains-source').setData({ type: 'FeatureCollection', features });
-  }
-  if (map.getSource('trails-source')) {
-    map.getSource('trails-source').setData({ type: 'FeatureCollection', features: trailFeatures });
   }
 }
 
@@ -480,7 +459,7 @@ function renderLivePositions() {
 function toggleHeatmap() {
   heatmapActive = !heatmapActive;
 
-  const trainLayers = ['trains-glow', 'trains-dot', 'trains-label', 'trains-direction', 'trails-layer'];
+  const trainLayers = ['trains-glow', 'trains-dot', 'trains-label', 'trains-direction'];
   const vis = heatmapActive ? 'none' : 'visible';
   trainLayers.forEach(id => {
     if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
@@ -571,23 +550,20 @@ function updateLegendState() {
 }
 
 function updateMapFilters() {
-  const layerIds = ['trains-dot', 'trains-glow', 'trains-label', 'trains-direction', 'trails-layer'];
+  const layerIds = ['trains-dot', 'trains-glow', 'trains-label', 'trains-direction'];
 
   if (selectedGroups.size > 0) {
-    const allRoutes  = [...selectedGroups].flatMap(g => g.routes);
-    const f          = ['in', ['get', 'route'], ['literal', allRoutes]];
+    const allRoutes = [...selectedGroups].flatMap(g => g.routes);
+    const f         = ['in', ['get', 'route'], ['literal', allRoutes]];
     layerIds.forEach(id => map.setFilter(id, f));
-    // trails-layer filters on 'color', not 'route' — filter there by color
-    const selColors = [...new Set([...selectedGroups].map(g => g.color))];
-    map.setFilter('trails-layer', ['in', ['get', 'color'], ['literal', selColors]]);
 
-    map.setPaintProperty('lines-layer', 'line-opacity', ['case', ['in', ['get', 'color'], ['literal', selColors]], 0.85, 0.05]);
-    map.setPaintProperty('lines-layer', 'line-width',   ['case', ['in', ['get', 'color'], ['literal', selColors]], 3,    1]);
+    const selColors = [...new Set([...selectedGroups].map(g => g.color))];
+    map.setPaintProperty('lines-layer', 'line-opacity', ['case', ['in', ['get', 'color'], ['literal', selColors]], 0.9, 0.05]);
+    map.setPaintProperty('lines-layer', 'line-width',   ['case', ['in', ['get', 'color'], ['literal', selColors]], 4,   1  ]);
   } else {
     layerIds.forEach(id => map.setFilter(id, null));
-    map.setFilter('trails-layer', null);
-    map.setPaintProperty('lines-layer', 'line-opacity', 0.35);
-    map.setPaintProperty('lines-layer', 'line-width',   1.5);
+    map.setPaintProperty('lines-layer', 'line-opacity', 0.6);
+    map.setPaintProperty('lines-layer', 'line-width',   2.5);
   }
 }
 
