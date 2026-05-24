@@ -66,6 +66,8 @@ let targetFeatures = [];
 let selectedGroups = new Set();
 let heatmapActive  = false;
 let activePopup    = null;
+// routeId → array of GeoJSON LineString features (for on-track interpolation)
+let routeGeometries = {};
 
 // ── Initialise Mapbox ────────────────────────────────────────────────────
 
@@ -285,65 +287,136 @@ function startGlowPulse() {
 }
 
 // ── Load subway route lines ──────────────────────────────────────────────
-// Source: NYC OTI official ArcGIS Feature Service (the same dataset that
-// powers the City's own mapping tools).  Has proper WGS84 polylines and a
-// ROUTE integer code + LINE name we can colour-match against.
+// Priority:
+//   1. /subway-lines.geojson  — static file generated from MTA GTFS shapes.txt
+//      (complete, accurate, also used for on-track train interpolation)
+//   2. /api/lines             — serverless function (may 404 on Vercel)
+//   3. ArcGIS Feature Service — live fallback, but has coverage gaps
 
 async function loadLines() {
-  // Try our own serverless function first (has the best geometry from GTFS)
+  let geojson = null;
+
+  // 1. Static pre-generated GTFS shapes file (best quality)
   try {
-    const res = await fetch('/api/lines', { signal: AbortSignal.timeout(9000) });
+    const res = await fetch('/subway-lines.geojson', { signal: AbortSignal.timeout(12000) });
     if (res.ok) {
-      const geojson = await res.json();
-      if (!geojson._error && geojson.features?.length > 0) {
-        for (const f of geojson.features) f.properties.color = resolveLineColor(f.properties);
-        map.getSource('lines-source').setData(geojson);
-        console.log(`[lines] ${geojson.features.length} features from /api/lines`);
-        return;
+      const data = await res.json();
+      if (data.features?.length > 0) {
+        geojson = data;
+        console.log(`[lines] ${geojson.features.length} shapes from /subway-lines.geojson`);
       }
     }
   } catch (_) { /* fall through */ }
 
-  // Fall back: NYC official ArcGIS subway dataset (CORS-enabled, WGS84)
-  const ARCGIS_BASE =
-    'https://services6.arcgis.com/yG5s3afENB5iO9fj/arcgis/rest/services/Subway_view/FeatureServer/0/query';
-
-  try {
-    const allFeatures = [];
-    let offset = 0;
-
-    // Paginate in case the service caps results per request
-    while (true) {
-      const params = new URLSearchParams({
-        where: '1=1',
-        outFields: 'ROUTE,LINE,SUBWAY_LABEL',
-        outSR: '4326',
-        resultOffset: offset,
-        resultRecordCount: 2000,
-        f: 'geojson',
-      });
-      const res = await fetch(`${ARCGIS_BASE}?${params}`, { signal: AbortSignal.timeout(20000) });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const data = await res.json();
-      const features = data.features || [];
-      allFeatures.push(...features);
-
-      console.log(`[lines] ArcGIS offset=${offset} → ${features.length} features`);
-      if (!data.exceededTransferLimit || features.length === 0) break;
-      offset += 2000;
-    }
-
-    if (allFeatures.length === 0) throw new Error('no features returned');
-
-    console.log(`[lines] total ${allFeatures.length} subway segments`);
-    if (allFeatures[0]) console.log('[lines] sample:', JSON.stringify(allFeatures[0].properties));
-
-    for (const f of allFeatures) f.properties.color = resolveLineColor(f.properties);
-    map.getSource('lines-source').setData({ type: 'FeatureCollection', features: allFeatures });
-  } catch (err) {
-    console.error('[lines] ArcGIS fallback failed:', err.message);
+  // 2. Serverless /api/lines
+  if (!geojson) {
+    try {
+      const res = await fetch('/api/lines', { signal: AbortSignal.timeout(9000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (!data._error && data.features?.length > 0) {
+          geojson = data;
+          console.log(`[lines] ${geojson.features.length} features from /api/lines`);
+        }
+      }
+    } catch (_) { /* fall through */ }
   }
+
+  // 3. ArcGIS fallback (paginated)
+  if (!geojson) {
+    const ARCGIS_BASE =
+      'https://services6.arcgis.com/yG5s3afENB5iO9fj/arcgis/rest/services/Subway_view/FeatureServer/0/query';
+    try {
+      const allFeatures = [];
+      let offset = 0;
+      while (true) {
+        const params = new URLSearchParams({
+          where: '1=1', outFields: 'ROUTE,LINE,SUBWAY_LABEL',
+          outSR: '4326', resultOffset: offset, resultRecordCount: 2000, f: 'geojson',
+        });
+        const res = await fetch(`${ARCGIS_BASE}?${params}`, { signal: AbortSignal.timeout(20000) });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const features = data.features || [];
+        allFeatures.push(...features);
+        console.log(`[lines] ArcGIS offset=${offset} → ${features.length} features`);
+        if (!data.exceededTransferLimit || features.length === 0) break;
+        offset += 2000;
+      }
+      if (allFeatures.length === 0) throw new Error('no features');
+      geojson = { type: 'FeatureCollection', features: allFeatures };
+      console.log(`[lines] ArcGIS total: ${allFeatures.length} segments`);
+    } catch (err) {
+      console.error('[lines] ArcGIS fallback failed:', err.message);
+    }
+  }
+
+  // Apply colours and push to map
+  if (geojson?.features?.length > 0) {
+    for (const f of geojson.features) {
+      if (!f.properties.color) f.properties.color = resolveLineColor(f.properties);
+    }
+    map.getSource('lines-source').setData(geojson);
+    buildRouteGeometries(geojson);
+  }
+}
+
+// ── Build route geometry lookup for on-track interpolation ───────────────
+// Called once after lines load. Maps routeId → array of LineString features.
+
+function buildRouteGeometries(geojson) {
+  routeGeometries = {};
+  for (const f of geojson.features) {
+    if (f.geometry?.type !== 'LineString') continue;
+    const routeId = f.properties.routeId;
+    if (!routeId) continue;
+    if (!routeGeometries[routeId]) routeGeometries[routeId] = [];
+    routeGeometries[routeId].push(f);
+  }
+  // Map express variants and shuttles to their parent route shapes
+  const aliases = { '6X':'6', '7X':'7', 'FX':'F', 'GS':'S', 'FS':'S', 'H':'S' };
+  for (const [alias, base] of Object.entries(aliases)) {
+    if (!routeGeometries[alias] && routeGeometries[base]) {
+      routeGeometries[alias] = routeGeometries[base];
+    }
+  }
+  const nRoutes = Object.keys(routeGeometries).length;
+  const nShapes = Object.values(routeGeometries).reduce((s, a) => s + a.length, 0);
+  if (nRoutes > 0) console.log(`[lines] geometry index: ${nRoutes} routes, ${nShapes} shapes`);
+}
+
+// ── Pre-compute snap positions for a train ───────────────────────────────
+// Called in fetchAndUpdateTrains so the per-second render loop is cheap.
+// Fills train.snapLine, train.prevSnapDist, train.nextSnapDist (km along line).
+
+function precomputeSnap(train) {
+  train.snapLine = null;
+  if (!train.prevStopId || !train.nextStopId) return;
+  if (typeof turf === 'undefined') return;
+
+  const lines = routeGeometries[train.routeId];
+  if (!lines?.length) return;
+
+  const prev = lookupStop(train.prevStopId);
+  const next = lookupStop(train.nextStopId);
+  if (!prev || !next) return;
+
+  const prevPt = turf.point([prev.lon, prev.lat]);
+  const nextPt = turf.point([next.lon, next.lat]);
+
+  let bestLine = null, bestScore = Infinity;
+  for (const line of lines) {
+    const d1 = turf.nearestPointOnLine(line, prevPt).properties.dist;
+    const d2 = turf.nearestPointOnLine(line, nextPt).properties.dist;
+    if (d1 + d2 < bestScore) { bestScore = d1 + d2; bestLine = line; }
+  }
+
+  // Discard if both stops are more than ~1.5 km from any known line segment
+  if (!bestLine || bestScore > 3.0) return;
+
+  train.snapLine     = bestLine;
+  train.prevSnapDist = turf.nearestPointOnLine(bestLine, prevPt).properties.location;
+  train.nextSnapDist = turf.nearestPointOnLine(bestLine, nextPt).properties.location;
 }
 
 /**
@@ -481,6 +554,11 @@ async function fetchAndUpdateTrains() {
       });
     }
 
+    // Pre-compute on-track snap positions (expensive Turf work done once per fetch)
+    if (typeof turf !== 'undefined' && Object.keys(routeGeometries).length > 0) {
+      for (const train of trains) precomputeSnap(train);
+    }
+
     liveTrains = trains;
     renderLivePositions();
 
@@ -510,12 +588,24 @@ function renderLivePositions() {
     if (train.prevStopId && train.nextStopId && train.departureTime && train.arrivalTime) {
       const dur = train.arrivalTime - train.departureTime;
       if (dur > 0 && dur < 600) {
-        const t    = Math.max(0, Math.min(1, (nowSec - train.departureTime) / dur));
-        const prev = lookupStop(train.prevStopId);
-        const next = lookupStop(train.nextStopId);
-        if (prev && next) {
-          lat = lerp(prev.lat, next.lat, t);
-          lon = lerp(prev.lon, next.lon, t);
+        const t = Math.max(0, Math.min(1, (nowSec - train.departureTime) / dur));
+
+        if (train.snapLine && typeof turf !== 'undefined') {
+          // On-track interpolation: move the dot along actual route geometry
+          const lineLen  = turf.length(train.snapLine);          // km
+          const dist     = train.prevSnapDist + (train.nextSnapDist - train.prevSnapDist) * t;
+          const clamped  = Math.max(0, Math.min(lineLen, dist));
+          const pt       = turf.along(train.snapLine, clamped);
+          lon = pt.geometry.coordinates[0];
+          lat = pt.geometry.coordinates[1];
+        } else {
+          // Fallback: straight-line lerp until geometry is loaded
+          const prev = lookupStop(train.prevStopId);
+          const next = lookupStop(train.nextStopId);
+          if (prev && next) {
+            lat = lerp(prev.lat, next.lat, t);
+            lon = lerp(prev.lon, next.lon, t);
+          }
         }
       }
     }
